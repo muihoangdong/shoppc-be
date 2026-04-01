@@ -7,6 +7,8 @@ const errorHandler = require('./middlewares/errorHandler');
 const productRoutes = require('./routes/productRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const cartRoutes = require('./routes/cartRoutes');
+const authRoutes = require('./routes/auth.routes');
+const userRoutes = require('./routes/user.routes');
 
 const app = express();
 
@@ -14,6 +16,8 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 
 // Routes
 app.use('/api/products', productRoutes);
