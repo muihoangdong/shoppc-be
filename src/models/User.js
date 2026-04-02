@@ -1,87 +1,82 @@
-// models/User.js
-const mongoose = require('mongoose');
+const db = require('../config/database');
 const bcrypt = require('bcryptjs');
 
-const userSchema = new mongoose.Schema({
-  username: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-    minlength: 3,
-    maxlength: 50
-  },
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-    lowercase: true,
-    match: [/^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/, 'Please fill a valid email address']
-  },
-  password: {
-    type: String,
-    required: true,
-    minlength: 6
-  },
-  fullName: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  phone: {
-    type: String,
-    trim: true
-  },
-  address: {
-    street: String,
-    city: String,
-    district: String,
-    ward: String
-  },
-  role: {
-    type: String,
-    enum: ['user', 'admin', 'staff'],
-    default: 'user'
-  },
-  avatar: {
-    type: String,
-    default: ''
-  },
-  isActive: {
-    type: Boolean,
-    default: true
-  },
-  lastLogin: {
-    type: Date
-  },
-  refreshToken: {
-    type: String
-  },
-  resetPasswordToken: String,
-  resetPasswordExpire: Date,
-  emailVerified: {
-    type: Boolean,
-    default: false
-  },
-  emailVerificationToken: String,
-  emailVerificationExpire: Date
-}, {
-  timestamps: true
-});
+class UserModel {
+    static baseSelect = 'id, username, email, full_name, avatar, role, status, last_login, created_at, updated_at';
 
-// Encrypt password before saving
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) {
-    next();
-  }
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-});
+    static async getAllUsers() {
+        const [rows] = await db.query(
+            `SELECT ${this.baseSelect} FROM users ORDER BY created_at DESC`
+        );
+        return rows;
+    }
 
-// Match user entered password to hashed password in database
-userSchema.methods.matchPassword = async function(enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
-};
+    static async getUserById(id) {
+        const [rows] = await db.query(
+            `SELECT ${this.baseSelect} FROM users WHERE id = ?`,
+            [id]
+        );
+        return rows[0];
+    }
 
-module.exports = mongoose.model('User', userSchema);
+    static async getUserAuthById(id) {
+        const [rows] = await db.query('SELECT * FROM users WHERE id = ?', [id]);
+        return rows[0];
+    }
+
+    static async getUserByUsername(username) {
+        const [rows] = await db.query('SELECT * FROM users WHERE username = ?', [username]);
+        return rows[0];
+    }
+
+    static async getUserByEmail(email) {
+        const [rows] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+        return rows[0];
+    }
+
+    static async createUser(userData) {
+        const { username, password, email, full_name, avatar = null, role = 'staff', status = 'active' } = userData;
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const [result] = await db.query(
+            `INSERT INTO users (username, password, email, full_name, avatar, role, status) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [username, hashedPassword, email, full_name, avatar, role, status]
+        );
+        return result.insertId;
+    }
+
+    static async updateUser(id, userData) {
+        const allowed = ['full_name', 'email', 'avatar', 'role', 'status'];
+        const entries = Object.entries(userData).filter(([key, value]) => allowed.includes(key) && value !== undefined);
+
+        if (entries.length === 0) return 0;
+
+        const setClause = entries.map(([key]) => `${key} = ?`).join(', ');
+        const values = entries.map(([, value]) => value === '' ? null : value);
+        values.push(id);
+
+        const [result] = await db.query(`UPDATE users SET ${setClause}, updated_at = NOW() WHERE id = ?`, values);
+        return result.affectedRows;
+    }
+
+    static async updatePassword(id, newPassword) {
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        const [result] = await db.query('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [hashedPassword, id]);
+        return result.affectedRows;
+    }
+
+    static async deleteUser(id) {
+        const [result] = await db.query('DELETE FROM users WHERE id = ?', [id]);
+        return result.affectedRows;
+    }
+
+    static async updateLastLogin(id) {
+        const [result] = await db.query('UPDATE users SET last_login = NOW() WHERE id = ?', [id]);
+        return result.affectedRows;
+    }
+
+    static async verifyPassword(user, password) {
+        return bcrypt.compare(password, user.password);
+    }
+}
+
+module.exports = UserModel;
