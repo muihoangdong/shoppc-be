@@ -43,7 +43,7 @@ Nhân viên bấm xóa trên dashboard sẽ nhận thông báo lỗi (HTTP 403).
 ## Việc BẠN cần làm khi nâng cấp
 
 1. **Sửa vai trò trong database** bằng `npm run fix-roles` (sao lưu trước; hướng dẫn chi tiết ở `ROLES.md`). Script thêm giá trị `customer` vào cột `users.role` và hạ quyền các tài khoản đã đăng ký từ storefront. Nếu bỏ qua, khách hàng sẽ không đăng ký được (server in cảnh báo khi khởi động).
-2. **Rà soát tài khoản `staff` cũ**: các khách đã đăng ký từ storefront trước đây vẫn đang là `staff` cho tới khi bạn chạy lệnh trên với `--keep <username nhân viên thật>`. (File `migrations/001_customer_role.sql` làm tương tự bằng SQL thủ công.)
+2. **Rà soát tài khoản `staff` cũ**: các khách đã đăng ký từ storefront trước đây vẫn đang là `staff` cho tới khi bạn chạy lệnh trên với `--keep <username nhân viên thật>`.
 3. **Đặt `JWT_SECRET`** (chuỗi ngẫu nhiên >= 32 ký tự) trong `.env` **và trong biến môi trường trên nơi deploy (Render...)**. Nếu deploy với `NODE_ENV=production` mà thiếu biến này, server sẽ không chạy. Nên đổi secret mới để vô hiệu hóa mọi token cũ.
 4. Nên đổi mật khẩu các tài khoản admin/staff nếu hệ thống từng bị công khai ra internet.
 5. (Tùy chọn) Bật gửi email quên mật khẩu: `npm install nodemailer` và điền `SMTP_*` trong `.env`.
