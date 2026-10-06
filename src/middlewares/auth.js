@@ -1,7 +1,6 @@
-const jwt = require('jsonwebtoken');
 const UserModel = require('../models/User');
-
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this';
+const { verifyAccessToken } = require('../config/jwt');
+const { hasRole } = require('../config/roles');
 
 // Middleware xác thực token
 const authenticate = async (req, res, next) => {
@@ -18,7 +17,7 @@ const authenticate = async (req, res, next) => {
         const token = authHeader.split(' ')[1];
         
         try {
-            const decoded = jwt.verify(token, JWT_SECRET);
+            const decoded = verifyAccessToken(token);
             const user = await UserModel.getUserById(decoded.id);
             
             if (!user) {
@@ -58,7 +57,7 @@ const authenticate = async (req, res, next) => {
 
 // Middleware kiểm tra quyền admin
 const authorizeAdmin = (req, res, next) => {
-    if (req.user && req.user.role === 'admin') {
+    if (req.user && hasRole(req.user.role, 'admin')) {
         next();
     } else {
         res.status(403).json({
@@ -70,7 +69,7 @@ const authorizeAdmin = (req, res, next) => {
 
 // Middleware kiểm tra quyền staff hoặc admin
 const authorizeStaff = (req, res, next) => {
-    if (req.user && (req.user.role === 'admin' || req.user.role === 'staff')) {
+    if (req.user && hasRole(req.user.role, 'staff')) {
         next();
     } else {
         res.status(403).json({

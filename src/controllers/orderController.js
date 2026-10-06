@@ -1,26 +1,117 @@
 const OrderModel = require('../models/Order');
+const { getAnalytics, RangeInputError } = require('../services/analytics');
+const Events = require('../realtime/events');
+
+const isStr = (v) => typeof v === 'string';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_RE = /^[0-9+\s().-]{8,20}$/;
+const digits = (v) => String(v || '').replace(/\D/g, '');
+
+/**
+ * Lỗi nghiệp vụ (có `expose`) -> trả đúng mã + thông báo.
+ * Lỗi khác (SQL, bug...) -> ghi log và trả thông báo chung, KHÔNG lộ chi tiết nội bộ.
+ */
+const sendError = (res, error, fallback = 'Đã xảy ra lỗi, vui lòng thử lại sau') => {
+    if (error && (error.expose || error instanceof RangeInputError)) {
+        return res.status(error.status || 400).json({ success: false, message: error.message });
+    }
+    console.error('Order API error:', error);
+    return res.status(500).json({ success: false, message: fallback });
+};
+
+// Các trường khách được phép gửi khi đặt hàng, kèm độ dài tối đa. KHÔNG có phí ship/giảm giá/tổng tiền:
+// những thứ đó do server tính.
+const ORDER_FIELDS = {
+    customer_name: 100,
+    customer_email: 150,
+    customer_phone: 20,
+    customer_address: 255,
+    customer_ward: 100,
+    customer_district: 100,
+    customer_city: 100,
+    note: 500
+};
+
+function buildOrderPayload(req) {
+    const body = req.body || {};
+    const session_id = body.session_id || req.headers['x-session-id'];
+    if (!isStr(session_id) || !session_id || session_id.length > 100) {
+        return { error: 'Thiếu mã giỏ hàng (session_id)' };
+    }
+
+    const payload = { session_id, user_id: req.user?.id || null };
+    for (const [field, max] of Object.entries(ORDER_FIELDS)) {
+        const v = body[field];
+        if (v === undefined || v === null || v === '') continue;
+        if (!isStr(v)) return { error: `Trường ${field} không hợp lệ` };
+        if (v.trim().length > max) return { error: `Trường ${field} quá dài (tối đa ${max} ký tự)` };
+        payload[field] = v.trim();
+    }
+
+    for (const required of ['customer_name', 'customer_email', 'customer_phone', 'customer_address', 'customer_city']) {
+        if (!payload[required]) return { error: 'Thiếu thông tin đặt hàng bắt buộc' };
+    }
+    if (!EMAIL_RE.test(payload.customer_email)) return { error: 'Email không hợp lệ' };
+    if (!PHONE_RE.test(payload.customer_phone) || digits(payload.customer_phone).length < 8) {
+        return { error: 'Số điện thoại không hợp lệ' };
+    }
+
+    if (body.payment_method !== undefined) {
+        if (!isStr(body.payment_method)) return { error: 'Phương thức thanh toán không hợp lệ' };
+        payload.payment_method = body.payment_method;
+    }
+    return { payload };
+}
 
 class OrderController {
     static async createOrder(req, res) {
         try {
-            const session_id = req.body.session_id || req.headers['x-session-id'];
-            const payload = { ...req.body, session_id, user_id: req.user?.id || null };
-            if (!session_id || !payload.customer_name || !payload.customer_email || !payload.customer_phone || !payload.customer_address || !payload.customer_city) {
-                return res.status(400).json({ success: false, message: 'Thiếu thông tin đặt hàng bắt buộc' });
-            }
+            const { payload, error } = buildOrderPayload(req);
+            if (error) return res.status(400).json({ success: false, message: error });
+
             const order = await OrderModel.createOrderFromCart(payload);
+            Events.orderNew(order); // báo realtime cho nhân viên đang mở dashboard
+            Events.productChanged(); // tồn kho vừa bị trừ
             res.status(201).json({ success: true, message: 'Đặt hàng thành công', data: order });
         } catch (error) {
-            res.status(400).json({ success: false, message: error.message });
+            // Lỗi cơ sở dữ liệu có `code`/`sqlState`; lỗi nghiệp vụ (giỏ trống, hết hàng...) là Error thường với thông báo tiếng Việt
+            if (error && (error.code || error.sqlState)) {
+                console.error('Create order DB error:', error);
+                return res.status(500).json({ success: false, message: 'Không thể tạo đơn hàng, vui lòng thử lại sau' });
+            }
+            res.status(error.status || 400).json({ success: false, message: error.message });
         }
     }
 
+    /**
+     * Không có `page`/`limit`: trả toàn bộ (tương thích cũ, chatbot/trang cũ).
+     * Có `page` hoặc `limit`: lọc + phân trang phía server, kèm `meta` (tổng, số trang, đếm theo trạng thái).
+     */
     static async getOrders(req, res) {
         try {
-            const orders = await OrderModel.getOrders(req.query);
+            const q = req.query || {};
+            if (q.page !== undefined || q.limit !== undefined) {
+                const result = await OrderModel.getOrdersPaged(q);
+                const { orders, ...meta } = result;
+                return res.json({ success: true, data: orders, meta });
+            }
+            const legacy = {};
+            if (isStr(q.status)) legacy.status = q.status;
+            if (isStr(q.payment_status)) legacy.payment_status = q.payment_status;
+            const orders = await OrderModel.getOrders(legacy);
             res.json({ success: true, data: orders });
         } catch (error) {
-            res.status(500).json({ success: false, message: error.message });
+            sendError(res, error);
+        }
+    }
+
+    static async getOrderById(req, res) {
+        try {
+            const order = await OrderModel.getOrderDetail(Number(req.params.id));
+            if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+            res.json({ success: true, data: order });
+        } catch (error) {
+            sendError(res, error);
         }
     }
 
@@ -29,30 +120,55 @@ class OrderController {
             const items = await OrderModel.getOrderItems(req.params.id);
             res.json({ success: true, data: items });
         } catch (error) {
-            res.status(500).json({ success: false, message: error.message });
+            sendError(res, error);
         }
     }
 
     static async updateOrderStatus(req, res) {
         try {
-            const { status, note } = req.body;
-            if (!status) return res.status(400).json({ success: false, message: 'Thiếu trạng thái mới' });
-            const order = await OrderModel.updateOrderStatus(req.params.id, status, req.user?.id || null, note || null);
+            const { status, note } = req.body || {};
+            if (!isStr(status) || !status) return res.status(400).json({ success: false, message: 'Thiếu trạng thái mới' });
+            if (note !== undefined && note !== null && (!isStr(note) || note.length > 500)) {
+                return res.status(400).json({ success: false, message: 'Ghi chú không hợp lệ (tối đa 500 ký tự)' });
+            }
+            const order = await OrderModel.updateOrderStatus(Number(req.params.id), status, req.user?.id || null, note || null);
+            Events.orderUpdated(order, req.user ? { id: req.user.id, name: req.user.username } : null);
+            if (status === 'cancelled') Events.productChanged(); // hủy đơn hoàn lại tồn kho
             res.json({ success: true, message: 'Cập nhật trạng thái đơn hàng thành công', data: order });
         } catch (error) {
-            const statusCode = error.message.includes('Không tìm thấy') ? 404 : 400;
-            res.status(statusCode).json({ success: false, message: error.message });
+            sendError(res, error);
         }
     }
 
+    static async updatePaymentStatus(req, res) {
+        try {
+            const { payment_status } = req.body || {};
+            if (!isStr(payment_status)) return res.status(400).json({ success: false, message: 'Thiếu trạng thái thanh toán' });
+            const order = await OrderModel.updatePaymentStatus(Number(req.params.id), payment_status);
+            Events.orderUpdated(order, req.user ? { id: req.user.id, name: req.user.username } : null);
+            res.json({ success: true, message: 'Cập nhật thanh toán thành công', data: order });
+        } catch (error) {
+            sendError(res, error);
+        }
+    }
+
+    /**
+     * Tra cứu đơn công khai. Bắt buộc kèm số điện thoại đặt hàng (?phone=...) để người ngoài
+     * không dò được thông tin khách chỉ từ mã đơn. Sai mã hoặc sai SĐT đều trả 404 giống nhau.
+     */
     static async trackOrder(req, res) {
         try {
+            const notFound = () => res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+            const phone = req.query && req.query.phone;
+            if (!isStr(req.params.orderCode) || !isStr(phone) || digits(phone).length < 8) return notFound();
+
             const order = await OrderModel.getOrderByCode(req.params.orderCode);
-            if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+            if (!order || digits(order.customer_phone) !== digits(phone)) return notFound();
+
             const items = await OrderModel.getOrderItems(order.id);
             res.json({ success: true, data: { ...order, items } });
         } catch (error) {
-            res.status(500).json({ success: false, message: error.message });
+            sendError(res, error);
         }
     }
 
@@ -61,7 +177,21 @@ class OrderController {
             const stats = await OrderModel.getDashboardStats();
             res.json({ success: true, data: stats });
         } catch (error) {
-            res.status(500).json({ success: false, message: error.message });
+            sendError(res, error);
+        }
+    }
+
+    static async getAnalytics(req, res) {
+        try {
+            const { period, from, to } = req.query || {};
+            const data = await getAnalytics({
+                period: isStr(period) ? period : undefined,
+                from: isStr(from) ? from : undefined,
+                to: isStr(to) ? to : undefined
+            });
+            res.json({ success: true, data });
+        } catch (error) {
+            sendError(res, error);
         }
     }
 }

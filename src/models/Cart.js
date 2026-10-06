@@ -3,22 +3,23 @@ const db = require('../config/database');
 class CartModel {
     // Lấy giỏ hàng theo session_id
     static async getCart(sessionId) {
-        const result = await db.query(
+        const rows = await db.query(
             `SELECT ci.*, p.name, p.price, p.image_url, p.stock
              FROM cart_items ci
              JOIN products p ON ci.product_id = p.id
-             WHERE ci.session_id = $1`,
+             WHERE ci.session_id = ?`,
             [sessionId]
         );
-        
-        const rows = result.rows; // PostgreSQL trả về rows
-        
+
         // Tính tổng tiền
-        const total = rows.reduce((sum, item) => sum + (parseFloat(item.price) * item.quantity), 0);
-        
+        const total = rows.reduce(
+            (sum, item) => sum + (parseFloat(item.price) * item.quantity),
+            0
+        );
+
         return {
             items: rows,
-            total: total,
+            total,
             total_items: rows.reduce((sum, item) => sum + item.quantity, 0)
         };
     }
@@ -27,24 +28,29 @@ class CartModel {
     static async addToCart(sessionId, productId, quantity = 1) {
         // Kiểm tra sản phẩm đã có trong giỏ chưa
         const existing = await db.query(
-            'SELECT * FROM cart_items WHERE session_id = $1 AND product_id = $2',
+            'SELECT * FROM cart_items WHERE session_id = ? AND product_id = ?',
             [sessionId, productId]
         );
 
-        if (existing.rows.length > 0) {
+        if (existing.length > 0) {
             // Cập nhật số lượng
             const result = await db.query(
-                'UPDATE cart_items SET quantity = quantity + $1, updated_at = CURRENT_TIMESTAMP WHERE session_id = $2 AND product_id = $3',
+                `UPDATE cart_items
+                 SET quantity = quantity + ?,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE session_id = ? AND product_id = ?`,
                 [quantity, sessionId, productId]
             );
-            return result.rowCount; // rowCount thay cho affectedRows
+
+            return result.affectedRows || 1;
         } else {
             // Thêm mới
-            const result = await db.query(
-                'INSERT INTO cart_items (session_id, product_id, quantity) VALUES ($1, $2, $3) RETURNING id',
+            const result = await db.pool.query(
+                'INSERT INTO cart_items (session_id, product_id, quantity) VALUES (?, ?, ?)',
                 [sessionId, productId, quantity]
             );
-            return result.rows[0].id;
+
+            return result[0].insertId;
         }
     }
 
@@ -53,47 +59,55 @@ class CartModel {
         if (quantity <= 0) {
             return this.removeFromCart(sessionId, productId);
         }
-        
-        const result = await db.query(
-            'UPDATE cart_items SET quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE session_id = $2 AND product_id = $3',
+
+        const result = await db.pool.query(
+            `UPDATE cart_items
+             SET quantity = ?,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE session_id = ? AND product_id = ?`,
             [quantity, sessionId, productId]
         );
-        return result.rowCount;
+
+        return result[0].affectedRows;
     }
 
     // Xóa sản phẩm khỏi giỏ
     static async removeFromCart(sessionId, productId) {
-        const result = await db.query(
-            'DELETE FROM cart_items WHERE session_id = $1 AND product_id = $2',
+        const result = await db.pool.query(
+            'DELETE FROM cart_items WHERE session_id = ? AND product_id = ?',
             [sessionId, productId]
         );
-        return result.rowCount;
+
+        return result[0].affectedRows;
     }
 
     // Xóa toàn bộ giỏ hàng
     static async clearCart(sessionId) {
-        const result = await db.query(
-            'DELETE FROM cart_items WHERE session_id = $1',
+        const result = await db.pool.query(
+            'DELETE FROM cart_items WHERE session_id = ?',
             [sessionId]
         );
-        return result.rowCount;
+
+        return result[0].affectedRows;
     }
 
     // Kiểm tra tồn kho trước khi thanh toán
     static async checkStock(sessionId) {
-        const result = await db.query(
+        const items = await db.query(
             `SELECT ci.product_id, ci.quantity, p.stock, p.name
              FROM cart_items ci
              JOIN products p ON ci.product_id = p.id
-             WHERE ci.session_id = $1`,
+             WHERE ci.session_id = ?`,
             [sessionId]
         );
-        
-        const items = result.rows;
-        const outOfStock = items.filter(item => item.quantity > item.stock);
+
+        const outOfStock = items.filter(
+            item => item.quantity > item.stock
+        );
+
         return {
             valid: outOfStock.length === 0,
-            outOfStock: outOfStock
+            outOfStock
         };
     }
 
@@ -101,35 +115,40 @@ class CartModel {
     static async mergeCart(sessionId, userId) {
         // Lấy cart items từ session
         const sessionCart = await db.query(
-            'SELECT * FROM cart_items WHERE session_id = $1',
+            'SELECT * FROM cart_items WHERE session_id = ?',
             [sessionId]
         );
 
-        for (const item of sessionCart.rows) {
+        for (const item of sessionCart) {
             // Kiểm tra xem user đã có sản phẩm này trong giỏ chưa
             const existing = await db.query(
-                'SELECT * FROM cart_items WHERE session_id = $1 AND product_id = $2',
+                'SELECT * FROM cart_items WHERE session_id = ? AND product_id = ?',
                 [userId.toString(), item.product_id]
             );
 
-            if (existing.rows.length > 0) {
+            if (existing.length > 0) {
                 // Cập nhật số lượng
-                await db.query(
-                    'UPDATE cart_items SET quantity = quantity + $1 WHERE session_id = $2 AND product_id = $3',
+                await db.pool.query(
+                    `UPDATE cart_items
+                     SET quantity = quantity + ?
+                     WHERE session_id = ? AND product_id = ?`,
                     [item.quantity, userId.toString(), item.product_id]
                 );
             } else {
                 // Chuyển item sang user
-                await db.query(
-                    'UPDATE cart_items SET session_id = $1 WHERE id = $2',
+                await db.pool.query(
+                    'UPDATE cart_items SET session_id = ? WHERE id = ?',
                     [userId.toString(), item.id]
                 );
             }
         }
 
         // Xóa session cart cũ
-        await db.query('DELETE FROM cart_items WHERE session_id = $1', [sessionId]);
-        
+        await db.pool.query(
+            'DELETE FROM cart_items WHERE session_id = ?',
+            [sessionId]
+        );
+
         return true;
     }
 }
