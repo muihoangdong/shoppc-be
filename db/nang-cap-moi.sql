@@ -5,8 +5,10 @@
 --   3) Mã giảm giá                                             -> bảng coupons, cột orders.coupon_code
 --   4) Đánh giá sản phẩm (chỉ khách đã nhận hàng)              -> bảng product_reviews
 --
--- Cách dùng: mở file này trong MySQL Workbench / DBeaver / HeidiSQL, chọn database (VD shopdb) rồi chạy CẢ FILE.
---   Dòng lệnh:  mysql -u root -p shopdb < nang-cap-moi.sql
+-- Cách dùng: mở file này, chọn database (VD shopdb) rồi chạy CẢ FILE dưới dạng script:
+--   DBeaver:          Alt+X  (nút "Execute SQL Script"), KHÔNG dùng Ctrl+Enter (chỉ chạy 1 lệnh)
+--   MySQL Workbench:  Ctrl+Shift+Enter (biểu tượng tia sét)
+--   Dòng lệnh:        mysql -u root -p shopdb < nang-cap-moi.sql
 -- Hoặc dùng lệnh tự động (cùng kết quả):  cd shoppc-be && npm run migrate-db -- --apply
 --
 -- AN TOÀN: chỉ THÊM bảng / cột / chỉ mục, không xóa hay sửa dữ liệu nào. Phần nào đã có thì tự bỏ qua,
@@ -37,26 +39,32 @@ CREATE TABLE IF NOT EXISTS `email_otps` (
 ALTER TABLE `email_otps` MODIFY COLUMN `purpose` enum('register','change_email') NOT NULL DEFAULT 'register';
 
 -- ───────────── 2. Build PC: cột loại linh kiện + thông số ─────────────
-SET @has := (SELECT COUNT(*) FROM information_schema.columns
+SET @has = (SELECT COUNT(*) FROM information_schema.columns
              WHERE table_schema = DATABASE() AND table_name = 'products' AND column_name = 'part_type');
-SET @sql := IF(@has = 0,
+SET @sql = IF(@has = 0,
   "ALTER TABLE `products` ADD COLUMN `part_type` enum('cpu','mainboard','ram','vga','storage','psu','case','cooler') DEFAULT NULL",
   'SELECT ''products.part_type: đã có, bỏ qua'' AS ket_qua');
-PREPARE st FROM @sql; EXECUTE st; DEALLOCATE PREPARE st;
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
 
-SET @has := (SELECT COUNT(*) FROM information_schema.columns
+SET @has = (SELECT COUNT(*) FROM information_schema.columns
              WHERE table_schema = DATABASE() AND table_name = 'products' AND column_name = 'build_specs');
-SET @sql := IF(@has = 0,
+SET @sql = IF(@has = 0,
   'ALTER TABLE `products` ADD COLUMN `build_specs` json DEFAULT NULL',
   'SELECT ''products.build_specs: đã có, bỏ qua'' AS ket_qua');
-PREPARE st FROM @sql; EXECUTE st; DEALLOCATE PREPARE st;
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
 
-SET @has := (SELECT COUNT(*) FROM information_schema.statistics
+SET @has = (SELECT COUNT(*) FROM information_schema.statistics
              WHERE table_schema = DATABASE() AND table_name = 'products' AND index_name = 'idx_products_part_type');
-SET @sql := IF(@has = 0,
+SET @sql = IF(@has = 0,
   'ALTER TABLE `products` ADD KEY `idx_products_part_type` (`part_type`)',
   'SELECT ''idx_products_part_type: đã có, bỏ qua'' AS ket_qua');
-PREPARE st FROM @sql; EXECUTE st; DEALLOCATE PREPARE st;
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
 
 -- ───────────── 3. Mã giảm giá ─────────────
 CREATE TABLE IF NOT EXISTS `coupons` (
@@ -79,19 +87,23 @@ CREATE TABLE IF NOT EXISTS `coupons` (
   UNIQUE KEY `uk_coupons_code` (`code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-SET @has := (SELECT COUNT(*) FROM information_schema.columns
+SET @has = (SELECT COUNT(*) FROM information_schema.columns
              WHERE table_schema = DATABASE() AND table_name = 'orders' AND column_name = 'coupon_code');
-SET @sql := IF(@has = 0,
+SET @sql = IF(@has = 0,
   'ALTER TABLE `orders` ADD COLUMN `coupon_code` varchar(50) DEFAULT NULL AFTER `discount`',
   'SELECT ''orders.coupon_code: đã có, bỏ qua'' AS ket_qua');
-PREPARE st FROM @sql; EXECUTE st; DEALLOCATE PREPARE st;
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
 
-SET @has := (SELECT COUNT(*) FROM information_schema.statistics
+SET @has = (SELECT COUNT(*) FROM information_schema.statistics
              WHERE table_schema = DATABASE() AND table_name = 'orders' AND index_name = 'idx_orders_coupon');
-SET @sql := IF(@has = 0,
+SET @sql = IF(@has = 0,
   'ALTER TABLE `orders` ADD KEY `idx_orders_coupon` (`coupon_code`)',
   'SELECT ''idx_orders_coupon: đã có, bỏ qua'' AS ket_qua');
-PREPARE st FROM @sql; EXECUTE st; DEALLOCATE PREPARE st;
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
 
 -- ───────────── 4. Đánh giá sản phẩm ─────────────
 CREATE TABLE IF NOT EXISTS `product_reviews` (
