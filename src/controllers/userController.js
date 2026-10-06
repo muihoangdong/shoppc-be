@@ -63,7 +63,7 @@ async function createAccount(res, data, successMessage) {
 
 /** Thông báo sau khi tạo mã OTP. Chưa cấu hình gửi email (chạy thử): mã hiện ngay trên trang thay vì gửi email. */
 const sentMessage = (info, normal) => (info && info.dev_code
-    ? 'Chưa cấu hình gửi email (SMTP) nên đang ở chế độ chạy thử: mã xác nhận hiện ngay trên trang.'
+    ? 'Đã tạo mã xác nhận.'
     : normal);
 
 class UserController {
