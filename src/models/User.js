@@ -58,6 +58,7 @@ class UserModel {
         const {
             username,
             password,
+            password_hash, // mật khẩu đã băm sẵn (đăng ký qua OTP: mật khẩu được băm từ bước gửi mã, không lưu bản gốc)
             email,
             full_name,
             avatar = null,
@@ -65,7 +66,7 @@ class UserModel {
             status = 'active'
         } = userData;
 
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword = password_hash || await bcrypt.hash(password, 10);
 
         const [result] = await db.pool.query(
             `INSERT INTO users (

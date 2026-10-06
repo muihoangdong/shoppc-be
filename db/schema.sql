@@ -8,6 +8,7 @@
 --       (bản cũ là pending | confirmed | processing | shipping | delivered | cancelled nên không lưu được "Đang giao"/"Hoàn tất")
 --   - thêm chỉ mục cho các truy vấn thống kê/tìm kiếm đơn hàng, tồn kho thấp, giỏ hàng
 --   - thêm bảng chat hỗ trợ khách hàng: support_conversations, support_messages
+--   - thêm bảng email_otps: mã OTP xác nhận email khi đăng ký (tài khoản chỉ được tạo sau khi nhập đúng mã)
 --   - GIỮ NGUYÊN các cột/bảng cũ code hiện chưa dùng (tracking_number, admin_note, product_sku, shipping_tracking) để không mất dữ liệu
 -- Lưu ý: mỗi bảng KHÔNG có comment bên trong ngoặc CREATE TABLE (bộ phân tích của npm run migrate-db đọc file này).
 -- =====================================================================
@@ -193,4 +194,21 @@ CREATE TABLE IF NOT EXISTS `support_messages` (
   PRIMARY KEY (`id`),
   KEY `idx_support_msg_conv` (`conversation_id`,`id`),
   CONSTRAINT `fk_support_msg_conv` FOREIGN KEY (`conversation_id`) REFERENCES `support_conversations` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `email_otps` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `email` varchar(150) NOT NULL,
+  `purpose` enum('register') NOT NULL DEFAULT 'register',
+  `code_hash` char(64) NOT NULL,
+  `payload` json DEFAULT NULL,
+  `attempts` int NOT NULL DEFAULT '0',
+  `send_count` int NOT NULL DEFAULT '1',
+  `send_window_start` datetime NOT NULL,
+  `last_sent_at` datetime NOT NULL,
+  `expires_at` datetime NOT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_email_otps_email_purpose` (`email`,`purpose`),
+  KEY `idx_email_otps_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

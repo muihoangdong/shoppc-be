@@ -20,8 +20,9 @@
     "test:provider": "node tests/provider.test.js",
     "test:aiconnect": "node tests/aiconnect.test.js",
     "test:gemini": "node tests/gemini.test.js",
+    "test:otp": "node tests/otp.test.js",
     "test:schema": "node tests/schema.test.js",
-    "test": "node tests/chatbot.test.js && node tests/security.test.js && node tests/roles.test.js && node tests/orders.test.js && node tests/catalog.test.js && node tests/realtime.test.js && node tests/support.test.js && node tests/ai.test.js && node tests/provider.test.js && node tests/aiconnect.test.js && node tests/gemini.test.js && node tests/schema.test.js",
+    "test": "node tests/chatbot.test.js && node tests/security.test.js && node tests/roles.test.js && node tests/orders.test.js && node tests/catalog.test.js && node tests/realtime.test.js && node tests/support.test.js && node tests/ai.test.js && node tests/provider.test.js && node tests/aiconnect.test.js && node tests/gemini.test.js && node tests/otp.test.js && node tests/schema.test.js",
     "fix-roles": "node scripts/fix-roles.js",
     "create-admin": "node scripts/create-admin.js",
     "ai:check": "node scripts/ai-check.js",
@@ -34,7 +35,8 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.2",
-    "mysql2": "^3.6.5"
+    "mysql2": "^3.6.5",
+    "nodemailer": "^10.0.15"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

@@ -8,6 +8,8 @@ const {
     verifyResetToken
 } = require('../config/jwt');
 const { sendPasswordReset } = require('../services/mailer');
+const RegistrationOtp = require('../services/registrationOtp');
+const { sendError } = require('../utils/http');
 const { ROLES, DEFAULT_ROLE, USER_STATUSES } = require('../config/roles');
 
 // Đăng ký công khai CHỈ tạo 'customer'; admin/staff chỉ do admin tạo (POST /api/users). Xem config/roles.js
@@ -88,26 +90,87 @@ class UserController {
     }
 
     /** Đăng ký công khai (khách hàng). Mọi trường `role`/`status` do client gửi đều bị bỏ qua. */
+    /**
+     * Đăng ký bước 1: kiểm tra dữ liệu rồi GỬI MÃ OTP tới email. Tài khoản chỉ được tạo ở bước 2 (verifyRegistration),
+     * sau khi người dùng nhập đúng mã => chắc chắn email là thật và thuộc về người đăng ký.
+     */
     static async register(req, res) {
         try {
             const body = req.body || {};
             const problem = validateNewUser(body);
             if (problem) return res.status(400).json({ success: false, message: problem });
 
-            await createAccount(
-                res,
-                {
-                    username: body.username.trim(),
-                    password: body.password,
-                    email: body.email.trim(),
-                    full_name: body.full_name.trim(),
-                    role: DEFAULT_ROLE
-                },
-                'Đăng ký thành công'
-            );
+            const info = await RegistrationOtp.start({
+                username: body.username.trim(),
+                password: body.password,
+                email: body.email.trim(),
+                full_name: body.full_name.trim()
+            });
+            res.json({
+                success: true,
+                message: `Đã gửi mã xác nhận tới ${info.masked_email}. Vui lòng kiểm tra hộp thư (cả mục Spam/Quảng cáo).`,
+                data: info
+            });
         } catch (error) {
-            console.error('Register error:', error);
-            res.status(500).json({ success: false, message: error.message });
+            sendError(res, error, 'Không đăng ký được, vui lòng thử lại sau');
+        }
+    }
+
+    /** Đăng ký bước 2: nhập đúng mã OTP => tạo tài khoản 'customer' và đăng nhập luôn. */
+    static async verifyRegistration(req, res) {
+        try {
+            const { email, code } = req.body || {};
+            if (!isStr(email) || !isStr(code) || !email.trim() || !code.trim()) {
+                return res.status(400).json({ success: false, message: 'Vui lòng nhập email và mã xác nhận' });
+            }
+            const data = await RegistrationOtp.verify(email, code);
+
+            // Kiểm tra lại: trong lúc chờ nhập mã, có thể người khác đã lấy tên đăng nhập/email này
+            if (await UserModel.getUserByUsername(data.username)) {
+                return res.status(409).json({ success: false, message: 'Tên đăng nhập vừa được người khác sử dụng. Vui lòng đăng ký lại với tên khác.' });
+            }
+            if (await UserModel.getUserByEmail(data.email)) {
+                return res.status(409).json({ success: false, message: 'Email đã được sử dụng' });
+            }
+
+            let userId;
+            try {
+                userId = await UserModel.createUser({
+                    username: data.username,
+                    password_hash: data.password_hash,
+                    email: data.email,
+                    full_name: data.full_name,
+                    role: DEFAULT_ROLE
+                });
+            } catch (error) {
+                if (isRoleColumnError(error)) {
+                    console.error('❌ Không thể tạo tài khoản: cột users.role chưa hỗ trợ "customer". Hãy chạy: npm run fix-roles -- --apply (xem ROLES.md)');
+                    return res.status(503).json({ success: false, message: 'Chức năng đăng ký tạm thời chưa khả dụng, vui lòng thử lại sau' });
+                }
+                if (error && error.code === 'ER_DUP_ENTRY') {
+                    return res.status(409).json({ success: false, message: 'Tên đăng nhập hoặc email đã được sử dụng' });
+                }
+                throw error;
+            }
+
+            await UserModel.updateLastLogin(userId);
+            const user = await UserModel.getUserById(userId);
+            const token = signAccessToken(user);
+            res.status(201).json({ success: true, message: 'Xác nhận email thành công. Tài khoản đã được tạo!', data: { token, user } });
+        } catch (error) {
+            sendError(res, error, 'Không xác nhận được, vui lòng thử lại sau');
+        }
+    }
+
+    /** Gửi lại mã OTP đăng ký (có thời gian chờ và giới hạn số lần). */
+    static async resendRegistrationOtp(req, res) {
+        try {
+            const { email } = req.body || {};
+            if (!isStr(email) || !email.trim()) return res.status(400).json({ success: false, message: 'Vui lòng nhập email' });
+            const info = await RegistrationOtp.resend(email);
+            res.json({ success: true, message: `Đã gửi mã mới tới ${info.masked_email}.`, data: info });
+        } catch (error) {
+            sendError(res, error, 'Không gửi lại được mã, vui lòng thử lại sau');
         }
     }
 

@@ -70,7 +70,7 @@ const User = {
     createUser: async (d) => {
         if (state.failRoleColumn) throw Object.assign(new Error('Data truncated for column role'), { code: 'WARN_DATA_TRUNCATED' });
         state.created.push(d);
-        const u = { id: 100 + state.created.length, ...d, password: await fakeBcrypt.hash(d.password), status: 'active' };
+        const u = { id: 100 + state.created.length, ...d, password: d.password_hash || await fakeBcrypt.hash(d.password), status: 'active' };
         users.push(u);
         return u.id;
     },
@@ -90,6 +90,20 @@ const db = {
     pool: { query: async () => [{}] },
 };
 const noModel = {};
+// Bảng email_otps + mailer giả: lưu trong bộ nhớ, ghi lại mã OTP đã "gửi"
+const otpRows = [];
+let otpSeq = 0;
+const EmailOtp = {
+    find: async (email, purpose) => otpRows.find((r) => r.email === email && r.purpose === purpose) || null,
+    create: async (r) => { const row = { id: ++otpSeq, attempts: 0, send_count: 1, created_at: new Date(), ...r }; otpRows.push(row); return row.id; },
+    replaceCode: async (id, r) => Object.assign(otpRows.find((x) => x.id === id), { ...r, attempts: 0 }),
+    incrementAttempts: async (id) => { otpRows.find((x) => x.id === id).attempts += 1; },
+    remove: async (id) => { const i = otpRows.findIndex((x) => x.id === id); if (i >= 0) otpRows.splice(i, 1); },
+    purgeOlderThan: async () => {},
+};
+const sentOtps = [];
+// Chỉ thay hàm gửi OTP; gửi mail đặt lại mật khẩu vẫn là code thật (các test quên mật khẩu bên dưới dùng nó)
+const mailer = { ...require(path.join(BE, 'services/mailer.js')), sendRegisterOtp: async (m) => { sentOtps.push(m); return { delivered: true }; } };
 const stubs = new Map([
     [path.join(BE, 'models/User.js'), User],
     [path.join(BE, 'models/Product.js'), noModel],
@@ -97,6 +111,8 @@ const stubs = new Map([
     [path.join(BE, 'models/Order.js'), noModel],
     [path.join(BE, 'models/Cart.js'), noModel],
     [path.join(BE, 'config/database.js'), db],
+    [path.join(BE, 'models/EmailOtp.js'), EmailOtp],
+    [path.join(BE, 'services/mailer.js'), mailer],
 ]);
 const external = { express: fakeExpress, jsonwebtoken: fakeJwt, bcryptjs: fakeBcrypt, dotenv: { config() {} } };
 const origLoad = Module._load;
@@ -185,34 +201,55 @@ const test = async (name, fn) => {
     });
 
     console.log('Lỗ hổng 2: đăng ký không được tự chọn quyền');
+    // Đăng ký 2 bước: gửi mã OTP tới email, nhập đúng mã mới tạo tài khoản
+    const registerWithOtp = async (body) => {
+        const start = await call(Ctl.register, body);
+        if (start.code !== 200) return start;
+        const code = sentOtps.at(-1).code;
+        return call(Ctl.verifyRegistration, { email: body.email, code, role: 'admin' });
+    };
     await test('đăng ký với role=admin / status → luôn tạo "customer"', async () => {
         state.created.length = 0;
-        const res = await call(Ctl.register, { username: 'hacker', password: 'secret12', email: 'h@x.vn', full_name: 'H', role: 'admin', status: 'active' });
+        const res = await registerWithOtp({ username: 'hacker', password: 'secret12', email: 'h@x.vn', full_name: 'H', role: 'admin', status: 'active' });
         assert.strictEqual(res.code, 201);
         assert.strictEqual(state.created.length, 1);
         assert.strictEqual(state.created[0].role, 'customer');
         assert(!('status' in state.created[0]));
+        assert.strictEqual(Jwt.verifyAccessToken(res.body.data.token).role, 'customer', 'đăng nhập luôn với quyền customer');
     });
     await test('đăng ký thường (không gửi role) cũng là "customer", không còn là "staff"', async () => {
         state.created.length = 0;
-        await call(Ctl.register, { username: 'binhthuong', password: 'secret12', email: 'bt@x.vn', full_name: 'BT' });
+        await registerWithOtp({ username: 'binhthuong', password: 'secret12', email: 'bt@x.vn', full_name: 'BT' });
         assert.strictEqual(state.created[0].role, 'customer');
+    });
+    await test('bước gửi mã CHƯA tạo tài khoản; mật khẩu chỉ lưu dạng băm; mã sai không tạo tài khoản', async () => {
+        state.created.length = 0;
+        const start = await call(Ctl.register, { username: 'chuaxacnhan', password: 'matkhau99', email: 'cxn@x.vn', full_name: 'C' });
+        assert.strictEqual(start.code, 200); assert.strictEqual(start.body.data.otp_required, true);
+        assert.strictEqual(state.created.length, 0, 'chưa nhập mã thì chưa có tài khoản');
+        const row = otpRows.find((r) => r.email === 'cxn@x.vn');
+        assert(!('password' in row.payload) && row.payload.password_hash && row.payload.password_hash !== 'matkhau99', 'chỉ lưu mật khẩu đã băm');
+        assert(!JSON.stringify(row).includes(`"${sentOtps.at(-1).code}"`) && /^[0-9a-f]{64}$/.test(row.code_hash), 'chỉ lưu mã đã băm');
+        const wrong = sentOtps.at(-1).code === '000000' ? '111111' : '000000';
+        const bad = await call(Ctl.verifyRegistration, { email: 'cxn@x.vn', code: wrong });
+        assert.strictEqual(bad.code, 400); assert.strictEqual(state.created.length, 0);
     });
     await test('kiểm tra đầu vào đăng ký: thiếu/sai kiểu/quá ngắn/email sai/trùng', async () => {
         const base = { username: 'abcd', password: 'secret12', email: 'a@b.vn', full_name: 'A' };
         for (const [patch, re] of [
             [{ password: '123' }, /ít nhất 6/], [{ email: 'khong-hop-le' }, /Email/], [{ username: 'a b' }, /khoảng trắng/],
             [{ username: { id: 1 } }, /đầy đủ/], [{ password: ['x'] }, /đầy đủ/], [{ full_name: '   ' }, /đầy đủ/],
-            [{ username: 'admin' }, /đã tồn tại/], [{ email: 'admin@x.vn' }, /Email đã/],
+            [{ username: 'admin' }, /đã tồn tại/], [{ email: 'admin@x.vn' }, /Email đã/], [{ email: 'ADMIN@x.vn' }, /Email đã/],
         ]) {
             const res = await call(Ctl.register, { ...base, ...patch });
             assert.strictEqual(res.code, 400, JSON.stringify(patch)); assert(re.test(res.body.message), res.body.message);
         }
         assert.strictEqual((await call(Ctl.register, undefined)).code, 400);
+        assert.strictEqual((await call(Ctl.verifyRegistration, { email: { $ne: 1 }, code: '123456' })).code, 400);
     });
     await test('DB chưa migrate (role không nhận "customer") → 503 chung chung, không lộ chi tiết', async () => {
         state.failRoleColumn = true;
-        const { result: res, logs } = await capture(() => call(Ctl.register, { username: 'newuser', password: 'secret12', email: 'n@x.vn', full_name: 'N' }));
+        const { result: res, logs } = await capture(() => registerWithOtp({ username: 'newuser', password: 'secret12', email: 'n@x.vn', full_name: 'N' }));
         state.failRoleColumn = false;
         assert.strictEqual(res.code, 503); assert(!/role|truncat|sql/i.test(res.body.message));
         assert(logs.some((l) => l.includes('fix-roles')));
@@ -322,7 +359,8 @@ const test = async (name, fn) => {
         assert.strictEqual(ok.code, 200); assert.strictEqual(Jwt.verifyAccessToken(ok.body.data.token).id, 2);
     });
     await test('route quên/đặt lại mật khẩu/đăng ký vẫn công khai (không cần đăng nhập) và trỏ đúng controller', () => {
-        for (const [router, p, ctl] of [[authRoutes, '/forgot-password', Ctl.forgotPassword], [authRoutes, '/reset-password', Ctl.resetPassword], [authRoutes, '/register', Ctl.register], [userRoutes, '/register', Ctl.register]]) {
+        for (const [router, p, ctl] of [[authRoutes, '/forgot-password', Ctl.forgotPassword], [authRoutes, '/reset-password', Ctl.resetPassword], [authRoutes, '/register', Ctl.register], [userRoutes, '/register', Ctl.register],
+            [authRoutes, '/register/verify', Ctl.verifyRegistration], [userRoutes, '/register/verify', Ctl.verifyRegistration], [authRoutes, '/register/resend', Ctl.resendRegistrationOtp], [userRoutes, '/register/resend', Ctl.resendRegistrationOtp]]) {
             const h = find(router, 'post', p).handlers;
             assert.strictEqual(h.at(-1), ctl, p);
             assert(!h.includes(Auth.authenticate), `${p} phải công khai`);

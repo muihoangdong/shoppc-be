@@ -1,12 +1,14 @@
 const express = require('express');
 const UserController = require('../controllers/userController');
-const { loginLimiter, registerLimiter } = require('../middlewares/limiters');
+const { loginLimiter, registerLimiter, otpVerifyLimiter, otpResendLimiter } = require('../middlewares/limiters');
 const { authenticate, authorizeAdmin } = require('../middlewares/auth');
 
 const router = express.Router();
 
 router.post('/login', loginLimiter, UserController.login);
 router.post('/register', registerLimiter, UserController.register);
+router.post('/register/verify', otpVerifyLimiter, UserController.verifyRegistration);
+router.post('/register/resend', otpResendLimiter, UserController.resendRegistrationOtp);
 
 router.get('/me', authenticate, UserController.getCurrentUser);
 router.put('/me', authenticate, UserController.updateCurrentUser);
