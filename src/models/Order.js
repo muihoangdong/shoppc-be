@@ -12,6 +12,8 @@ const {
 } = require('../config/orderStatus');
 const { computeShippingFee } = require('../config/shipping');
 const { getTopProducts, resolveRange, todayYmd, addDays } = require('../services/analytics');
+const Coupons = require('../services/coupons');
+const CouponModel = require('./Coupon');
 
 /** Lỗi nghiệp vụ có mã HTTP; `expose` = thông báo an toàn để hiển thị cho người dùng. */
 class OrderError extends Error {
@@ -45,6 +47,7 @@ class OrderModel {
                 customer_city,
                 note = null,
                 payment_method = 'cod',
+                coupon_code = null,
             } = orderData;
 
             // Phí ship và giảm giá do SERVER quyết định: mọi giá trị client gửi lên đều bị bỏ qua
@@ -86,20 +89,37 @@ class OrderModel {
                 0
             );
 
-            const discount = 0;
+            // Mã giảm giá: khóa dòng mã đến hết transaction để hai đơn cùng lúc không vượt số lượt
+            let discount = 0;
+            let coupon = null;
+            if (coupon_code) {
+                const code = Coupons.normalizeCode(coupon_code);
+                if (code) {
+                    const [rows] = await client.query(`SELECT ${CouponModel.COLUMNS} FROM coupons WHERE code = ? FOR UPDATE`, [code]);
+                    coupon = rows[0] || null;
+                }
+                const usedByCustomer = coupon && Number(coupon.once_per_customer)
+                    ? Coupons.customerHasUsed(await CouponModel.ordersUsing(coupon.code, client), { phone: customer_phone, email: customer_email })
+                    : false;
+                const reason = Coupons.unusableReason(coupon, { subtotal, usedByCustomer });
+                if (reason) throw new OrderError(reason);
+                discount = Coupons.computeDiscount(coupon, subtotal);
+            }
+
+            // Phí ship tính theo tiền hàng trước giảm giá
             const shipping_fee = computeShippingFee(subtotal);
             const total_amount = subtotal - discount + shipping_fee;
 
             const order_code = `ORD-${Date.now()}`;
 
-            // Tạo đơn hàng
+            // Tạo đơn hàng (cột coupon_code chỉ ghi khi có dùng mã: database chưa nâng cấp vẫn đặt hàng thường được)
             const [orderResult] = await client.query(
                 `INSERT INTO orders (
                     order_code, user_id, customer_name, customer_email, customer_phone,
                     customer_address, customer_ward, customer_district, customer_city,
                     note, subtotal, discount, shipping_fee, total_amount,
-                    payment_method, payment_status, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending')`,
+                    payment_method${coupon ? ', coupon_code' : ''}, payment_status, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${coupon ? ', ?' : ''}, 'pending', 'pending')`,
                 [
                     order_code,
                     user_id,
@@ -116,10 +136,15 @@ class OrderModel {
                     shipping_fee,
                     total_amount,
                     payment_method,
+                    ...(coupon ? [coupon.code] : []),
                 ]
             );
 
             const orderId = orderResult.insertId;
+
+            if (coupon) {
+                await client.query('UPDATE coupons SET used_count = used_count + 1 WHERE id = ?', [coupon.id]);
+            }
 
             // Thêm order items và cập nhật stock
             for (const item of cartItems) {
@@ -296,6 +321,13 @@ static async updateOrderStatus(id, newStatus, changedBy = null, note = null) {
                         [item.quantity, item.product_id]
                     );
                 }
+            }
+            // ... và trả lại lượt dùng mã giảm giá
+            if (order.coupon_code) {
+                await client.query(
+                    'UPDATE coupons SET used_count = GREATEST(used_count - 1, 0) WHERE code = ?',
+                    [order.coupon_code]
+                );
             }
         }
 

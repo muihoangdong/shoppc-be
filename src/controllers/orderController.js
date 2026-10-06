@@ -61,6 +61,10 @@ function buildOrderPayload(req) {
         if (!isStr(body.payment_method)) return { error: 'Phương thức thanh toán không hợp lệ' };
         payload.payment_method = body.payment_method;
     }
+    if (body.coupon_code !== undefined && body.coupon_code !== null && body.coupon_code !== '') {
+        if (!isStr(body.coupon_code) || body.coupon_code.length > 50) return { error: 'Mã giảm giá không hợp lệ' };
+        payload.coupon_code = body.coupon_code;
+    }
     return { payload };
 }
 

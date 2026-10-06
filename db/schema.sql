@@ -10,6 +10,7 @@
 --   - thêm bảng chat hỗ trợ khách hàng: support_conversations, support_messages
 --   - products.part_type + products.build_specs: loại linh kiện và thông số để kiểm tra tương thích (trang Build PC)
 --   - thêm bảng email_otps: mã OTP xác nhận email khi đăng ký (tài khoản chỉ được tạo sau khi nhập đúng mã)
+--   - thêm bảng coupons + cột orders.coupon_code: mã giảm giá (theo % hoặc số tiền, đơn tối thiểu, hạn dùng, số lượt)
 --   - GIỮ NGUYÊN các cột/bảng cũ code hiện chưa dùng (tracking_number, admin_note, product_sku, shipping_tracking) để không mất dữ liệu
 -- Lưu ý: mỗi bảng KHÔNG có comment bên trong ngoặc CREATE TABLE (bộ phân tích của npm run migrate-db đọc file này).
 -- =====================================================================
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS `orders` (
   `note` text,
   `subtotal` decimal(15,2) NOT NULL DEFAULT '0.00',
   `discount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `coupon_code` varchar(50) DEFAULT NULL,
   `shipping_fee` decimal(15,2) NOT NULL DEFAULT '0.00',
   `total_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
   `payment_method` enum('cod','banking','momo','zalopay','vnpay') NOT NULL DEFAULT 'cod',
@@ -109,7 +111,8 @@ CREATE TABLE IF NOT EXISTS `orders` (
   CONSTRAINT `fk_orders_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   KEY `idx_orders_status_created` (`status`,`created_at`),
   KEY `idx_orders_created` (`created_at`),
-  KEY `idx_orders_phone` (`customer_phone`)
+  KEY `idx_orders_phone` (`customer_phone`),
+  KEY `idx_orders_coupon` (`coupon_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS `order_items` (
@@ -215,4 +218,24 @@ CREATE TABLE IF NOT EXISTS `email_otps` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_email_otps_email_purpose` (`email`,`purpose`),
   KEY `idx_email_otps_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `coupons` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `code` varchar(50) NOT NULL,
+  `description` varchar(255) DEFAULT NULL,
+  `type` enum('percentage','fixed') NOT NULL DEFAULT 'percentage',
+  `value` decimal(15,2) NOT NULL,
+  `min_order_value` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `max_discount` decimal(15,2) DEFAULT NULL,
+  `usage_limit` int DEFAULT NULL,
+  `used_count` int NOT NULL DEFAULT '0',
+  `once_per_customer` tinyint(1) NOT NULL DEFAULT '0',
+  `starts_on` date DEFAULT NULL,
+  `expires_on` date DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_coupons_code` (`code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

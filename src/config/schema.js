@@ -259,6 +259,11 @@ function classify(plan) {
             message = op.kind === 'create-table'
                 ? 'Thiếu bảng email_otps: đăng ký tài khoản mới và đổi email (xác nhận bằng mã OTP) sẽ báo lỗi.'
                 : `Bảng email_otps chưa cập nhật (${describeOp(op)}): xác nhận email bằng mã OTP có thể báo lỗi.`;
+        } else if (op.table === 'coupons' || (op.table === 'orders' && op.kind === 'add-column' && op.column === 'coupon_code')) {
+            level = 'warning';
+            message = op.kind === 'create-table'
+                ? 'Thiếu bảng coupons: mã giảm giá (trang quản lý và ô nhập mã khi thanh toán) sẽ báo lỗi.'
+                : `Thiếu ${op.column ? `cột ${op.table}.${op.column}` : describeOp(op)}: đặt hàng có dùng mã giảm giá sẽ báo lỗi.`;
         } else if (op.kind === 'add-index') {
             level = 'info';
             message = `Thiếu chỉ mục ${op.name} trên ${op.table} (chỉ làm truy vấn chậm hơn).`;

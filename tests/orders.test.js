@@ -28,6 +28,11 @@ const freshWorld = () => ({
         s_big: [{ product_id: 1, quantity: 99 }],
         s_empty: [],
     },
+    coupons: {
+        GIAM10: { id: 1, code: 'GIAM10', type: 'percentage', value: '10.00', min_order_value: '1000000.00', max_discount: '150000.00', usage_limit: 2, used_count: 0, once_per_customer: 0, starts_on: null, expires_on: null, is_active: 1 },
+        BOT200K: { id: 2, code: 'BOT200K', type: 'fixed', value: '200000.00', min_order_value: '0.00', max_discount: null, usage_limit: null, used_count: 0, once_per_customer: 1, starts_on: null, expires_on: null, is_active: 1 },
+        HETHAN: { id: 3, code: 'HETHAN', type: 'fixed', value: '50000.00', min_order_value: '0.00', max_discount: null, usage_limit: null, used_count: 0, once_per_customer: 0, starts_on: null, expires_on: '2020-01-31', is_active: 1 },
+    },
     orders: [], items: [], history: [], nextId: 1,
 });
 let W = freshWorld();
@@ -53,10 +58,17 @@ function run(s, p = []) {
             customer_address: p[5], customer_ward: p[6], customer_district: p[7], customer_city: p[8], note: p[9],
             subtotal: p[10], discount: p[11], shipping_fee: p[12], total_amount: p[13], payment_method: p[14],
             payment_status: 'pending', status: 'pending', created_at: new Date(),
+            ...(/coupon_code/.test(s) ? { coupon_code: p[15] } : {}),
         };
         W.orders.push(o);
         return { result: { insertId: o.id, affectedRows: 1 } };
     }
+    if (/FROM coupons WHERE code = \? FOR UPDATE$/.test(s)) { const c = W.coupons[p[0]]; return { rows: c ? [clone(c)] : [] }; }
+    if (/^SELECT customer_phone, customer_email FROM orders WHERE coupon_code = \? AND status <> 'cancelled'/.test(s)) {
+        return { rows: W.orders.filter((o) => o.coupon_code === p[0] && o.status !== 'cancelled').map(({ customer_phone, customer_email }) => ({ customer_phone, customer_email })) };
+    }
+    if (/^UPDATE coupons SET used_count = used_count \+ 1 WHERE id = \?/.test(s)) { Object.values(W.coupons).find((c) => c.id === p[0]).used_count += 1; return { result: { affectedRows: 1 } }; }
+    if (/^UPDATE coupons SET used_count = GREATEST\(used_count - 1, 0\) WHERE code = \?/.test(s)) { const c = W.coupons[p[0]]; if (c) c.used_count = Math.max(c.used_count - 1, 0); return { result: { affectedRows: c ? 1 : 0 } }; }
     if (/^INSERT INTO order_items/.test(s)) {
         W.items.push({ id: W.items.length + 1, order_id: p[0], product_id: p[1], product_name: p[2], quantity: p[4], price: p[5], total: p[6] });
         return { result: { affectedRows: 1 } };
@@ -255,6 +267,62 @@ const test = async (name, fn) => {
         await assert.rejects(Order.createOrderFromCart(buyer({ session_id: 's_big' })), /không đủ tồn kho/);
         await assert.rejects(Order.createOrderFromCart(buyer({ session_id: 's_empty' })), /Giỏ hàng đang trống/);
         assert.strictEqual(W.orders.length, 0); assert.strictEqual(W.products[1].stock, 5);
+    });
+
+    console.log('Mã giảm giá khi đặt hàng');
+    await test('mã % có trần: giảm 10% nhưng tối đa 150.000đ; tổng = tiền hàng - giảm + ship; lưu mã vào đơn, tăng lượt dùng', async () => {
+        const o = await Order.createOrderFromCart(buyer({ coupon_code: ' giam10 ' }));
+        assert.strictEqual(Number(o.subtotal), 2000000); assert.strictEqual(Number(o.discount), 150000);
+        assert.strictEqual(Number(o.shipping_fee), 30000, 'phí ship tính theo tiền hàng trước giảm');
+        assert.strictEqual(Number(o.total_amount), 1880000); assert.strictEqual(o.coupon_code, 'GIAM10');
+        assert.strictEqual(W.coupons.GIAM10.used_count, 1);
+    });
+    await test('đặt hàng không dùng mã: câu INSERT không đụng cột coupon_code (database chưa nâng cấp vẫn đặt hàng được)', async () => {
+        await Order.createOrderFromCart(buyer());
+        assert(!sqlLog.some((q) => /coupon/.test(q.sql)), 'không có câu SQL nào về mã giảm giá');
+    });
+    await test('mã không hợp lệ / hết hạn / chưa đủ tiền tối thiểu: báo lỗi rõ ràng, KHÔNG tạo đơn, KHÔNG trừ kho, giỏ còn nguyên', async () => {
+        await expectErr(Order.createOrderFromCart(buyer({ coupon_code: 'KHONGCO' })), 400, /không tồn tại/);
+        await expectErr(Order.createOrderFromCart(buyer({ coupon_code: '!!' })), 400, /không tồn tại/);
+        await expectErr(Order.createOrderFromCart(buyer({ coupon_code: 'HETHAN' })), 400, /hết hạn/);
+        W.products[2].price = '400000.00'; // giỏ còn 800.000đ
+        await expectErr(Order.createOrderFromCart(buyer({ coupon_code: 'GIAM10' })), 400, /tối thiểu 1\.000\.000₫.*còn thiếu 200\.000₫/);
+        assert.strictEqual(W.orders.length, 0); assert.strictEqual(W.products[2].stock, 10); assert(W.cart.s_ram); assert.strictEqual(W.coupons.GIAM10.used_count, 0);
+    });
+    await test('hết lượt: mã chỉ 2 lượt thì đơn thứ 3 bị từ chối; hủy một đơn thì trả lại lượt', async () => {
+        const a = await Order.createOrderFromCart(buyer({ coupon_code: 'GIAM10' })); W.cart.s_ram = [{ product_id: 2, quantity: 2 }];
+        await Order.createOrderFromCart(buyer({ coupon_code: 'GIAM10', customer_phone: '0911111111' })); W.cart.s_ram = [{ product_id: 2, quantity: 2 }];
+        await expectErr(Order.createOrderFromCart(buyer({ coupon_code: 'GIAM10' })), 400, /hết lượt/);
+        await Order.cancelOrder(a.id, 1, 'khách hủy');
+        assert.strictEqual(W.coupons.GIAM10.used_count, 1);
+        const c = await Order.createOrderFromCart(buyer({ coupon_code: 'GIAM10' }));
+        assert.strictEqual(Number(c.discount), 150000); assert.strictEqual(W.coupons.GIAM10.used_count, 2);
+    });
+    await test('mã "mỗi khách 1 lần": cùng SĐT (khác cách viết) hoặc cùng email bị chặn; đơn đã hủy không tính', async () => {
+        const a = await Order.createOrderFromCart(buyer({ coupon_code: 'BOT200K' }));
+        assert.strictEqual(Number(a.discount), 200000);
+        W.cart.s_ram = [{ product_id: 2, quantity: 2 }];
+        await expectErr(Order.createOrderFromCart(buyer({ coupon_code: 'BOT200K', customer_phone: '090 123 4567', customer_email: 'khac@x.vn' })), 400, /đã dùng mã/);
+        await expectErr(Order.createOrderFromCart(buyer({ coupon_code: 'BOT200K', customer_phone: '0999999999', customer_email: 'A@X.VN' })), 400, /đã dùng mã/);
+        const b = await Order.createOrderFromCart(buyer({ coupon_code: 'BOT200K', customer_phone: '0999999999', customer_email: 'b@x.vn' }));
+        assert.strictEqual(Number(b.discount), 200000);
+        await Order.cancelOrder(a.id, 1, 'hủy'); W.cart.s_ram = [{ product_id: 2, quantity: 2 }];
+        const again = await Order.createOrderFromCart(buyer({ coupon_code: 'BOT200K' }));
+        assert.strictEqual(Number(again.discount), 200000, 'đơn cũ đã hủy thì được dùng lại');
+    });
+    await test('mã giảm tiền cố định lớn hơn tiền hàng: chỉ giảm tối đa bằng tiền hàng (không bao giờ ra tổng âm)', async () => {
+        W.coupons.BOT200K.value = '5000000.00'; W.coupons.BOT200K.once_per_customer = 0;
+        const o = await Order.createOrderFromCart(buyer({ coupon_code: 'BOT200K' }));
+        assert.strictEqual(Number(o.discount), 2000000); assert.strictEqual(Number(o.total_amount), 30000);
+    });
+    await test('controller: nhận coupon_code từ khách, báo lỗi mã sai với mã 400; mã sai kiểu bị chặn', async () => {
+        let r = await call(OrderCtl.createOrder, { body: buyer({ coupon_code: 'giam10' }) });
+        assert.strictEqual(r.code, 201); assert.strictEqual(Number(r.body.data.discount), 150000);
+        W.cart.s_ram = [{ product_id: 2, quantity: 2 }];
+        r = await call(OrderCtl.createOrder, { body: buyer({ coupon_code: 'HETHAN' }) });
+        assert.strictEqual(r.code, 400); assert(/hết hạn/.test(r.body.message));
+        r = await call(OrderCtl.createOrder, { body: buyer({ coupon_code: { $ne: 1 } }) });
+        assert.strictEqual(r.code, 400); assert(/Mã giảm giá không hợp lệ/.test(r.body.message));
     });
 
     console.log('Đổi trạng thái đơn');
