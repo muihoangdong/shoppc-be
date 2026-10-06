@@ -16,9 +16,16 @@
 const { ValidationError } = require('../utils/http');
 
 let cachedTransport;
+let warnedNoPass = false;
 
 function loadTransport() {
     if (!process.env.SMTP_HOST) return null;
+    // Có tài khoản mà chưa có mật khẩu (ví dụ chưa tạo Mật khẩu ứng dụng Gmail): coi như chưa cấu hình, không cố gửi rồi báo lỗi
+    if (process.env.SMTP_USER && !process.env.SMTP_PASS) {
+        if (!warnedNoPass) console.warn('[mailer] Có SMTP_USER nhưng SMTP_PASS đang trống: chưa gửi được email (xem mục "Gửi email" trong .env.example).');
+        warnedNoPass = true;
+        return null;
+    }
     if (cachedTransport) return cachedTransport;
     try {
         const nodemailer = require('nodemailer'); // eslint-disable-line global-require

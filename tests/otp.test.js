@@ -135,7 +135,7 @@ const rejects = async (p, status, re) => {
     });
 
     console.log('Gửi email thật (mailer)');
-    await test('chưa cấu hình SMTP: dev in mã ra console; production báo 503 rõ ràng, không lộ mã', async () => {
+    await test('chưa cấu hình SMTP (hoặc thiếu SMTP_PASS): dev in mã ra console; production báo 503 rõ ràng, không lộ mã', async () => {
         delete require.cache[require.resolve(src('services/mailer.js'))];
         const Module = require('module');
         const real = Module._load(src('services/mailer.js'), null); // nạp bản thật (bỏ qua bản giả dùng cho service)
@@ -147,6 +147,13 @@ const rejects = async (p, status, re) => {
             const { result: e, logs } = await H.capture(() => real.sendRegisterOtp({ email: 'a@b.vn', code: '654321', ttlMinutes: 10 }).catch((x) => x));
             assert.strictEqual(e.status, 503); assert(/chưa cấu hình gửi email/.test(e.message)); assert(!logs.some((l) => /654321/.test(l)), 'production không in mã');
         } finally { delete process.env.NODE_ENV; }
+        // Có SMTP_HOST + SMTP_USER nhưng chưa điền SMTP_PASS: coi như chưa cấu hình (dev vẫn in mã), không cố gửi rồi lỗi
+        Object.assign(process.env, { SMTP_HOST: 'smtp.gmail.com', SMTP_USER: 'shop@gmail.com', SMTP_PASS: '' });
+        try {
+            const r = await H.capture(() => real.sendRegisterOtp({ email: 'a@b.vn', code: '777777', ttlMinutes: 10 }));
+            assert.deepStrictEqual(r.result, { delivered: false }); assert(r.logs.some((l) => /SMTP_PASS đang trống/.test(l)) && r.logs.some((l) => /777777/.test(l)));
+            assert.strictEqual(real.isConfigured(), false);
+        } finally { delete process.env.SMTP_HOST; delete process.env.SMTP_USER; delete process.env.SMTP_PASS; }
     });
 
     done(); setImmediate(() => process.exit(process.exitCode || 0));
