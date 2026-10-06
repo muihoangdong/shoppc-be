@@ -54,8 +54,11 @@ const purgeOld = (now) => EmailOtp.purgeOlderThan(new Date(now.getTime() - PENDI
  * Áp dụng thời gian chờ giữa 2 lần gửi và giới hạn số lần gửi mỗi giờ.
  * Gửi thất bại thì khôi phục trạng thái cũ để người dùng thử lại được ngay.
  */
-async function issueCode({ purpose, email, payload, existing, now, send }) {
-    if (existing) {
+async function issueCode({ purpose, email, payload, existing: found, now, send }) {
+    // Yêu cầu cũ có giờ gửi "ở tương lai" (database đem từ máy khác múi giờ, đổi giờ máy...): coi như yêu cầu đã cũ,
+    // không bắt người dùng chờ hàng giờ. (Trước đây: "Vui lòng đợi 23337 giây...")
+    const existing = found && secondsBetween(now, found.last_sent_at) < -60 ? { ...found, send_count: 0, send_window_start: new Date(0) } : found;
+    if (existing && existing === found) {
         const waited = secondsBetween(now, existing.last_sent_at);
         if (waited < resendCooldownSec()) {
             throw new ValidationError(`Vui lòng đợi ${resendCooldownSec() - waited} giây trước khi gửi lại mã.`, 429);
@@ -81,14 +84,17 @@ async function issueCode({ purpose, email, payload, existing, now, send }) {
     if (existing) await EmailOtp.replaceCode(existing.id, record);
     else createdId = await EmailOtp.create({ email, purpose, ...record });
 
+    let sent;
     try {
-        await send(code, ttlMinutes());
+        sent = await send(code, ttlMinutes());
     } catch (error) {
         if (createdId) await EmailOtp.remove(createdId).catch(() => {});
-        else if (existing) await EmailOtp.replaceCode(existing.id, existing).catch(() => {});
+        else if (found) await EmailOtp.replaceCode(found.id, found).catch(() => {});
         throw error;
     }
-    return publicInfo(email, now, record.last_sent_at, record.expires_at);
+    const info = publicInfo(email, now, record.last_sent_at, record.expires_at);
+    // Chưa cấu hình gửi email (chỉ khi chạy thử, không phải production): kèm mã để trang web hiện ra
+    return sent && sent.dev_code ? { ...info, dev_code: sent.dev_code } : info;
 }
 
 /**

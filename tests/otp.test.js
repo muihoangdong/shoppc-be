@@ -31,9 +31,10 @@ const User = {
 };
 const sent = [];
 let mailFail = false;
+let devMode = false; // giả lập "chưa cấu hình SMTP khi chạy thử": mailer trả mã về
 const fakeSend = async (m) => {
     if (mailFail) { const e = new Error('Không gửi được email xác nhận.'); e.status = 502; e.expose = true; throw e; }
-    sent.push(m); return { delivered: true };
+    sent.push(m); return devMode ? { delivered: false, dev_code: m.code } : { delivered: true };
 };
 const mailer = { sendRegisterOtp: fakeSend, sendEmailChangeOtp: fakeSend };
 H.install(new Map([
@@ -49,7 +50,7 @@ const { test, done } = H.runner();
 
 const T0 = new Date('2026-10-06T08:00:00Z');
 const at = (sec) => new Date(T0.getTime() + sec * 1000);
-const reset = () => { otpRows.length = 0; sent.length = 0; mailFail = false; };
+const reset = () => { otpRows.length = 0; sent.length = 0; mailFail = false; devMode = false; };
 const data = (patch = {}) => ({ username: 'khachmoi', password: 'matkhau123', email: 'KhachMoi@Gmail.com ', full_name: 'Khách Mới', ...patch });
 const rejects = async (p, status, re) => {
     try { await p; } catch (e) { assert.strictEqual(e.status, status, e.message); if (re) assert(re.test(e.message), e.message); return e; }
@@ -67,6 +68,22 @@ const rejects = async (p, status, re) => {
         const row = otpRows[0];
         assert.strictEqual(row.payload.username, 'khachmoi'); assert(!('password' in row.payload)); assert.notStrictEqual(row.payload.password_hash, 'matkhau123');
         assert.strictEqual(row.code_hash, Otp._hashCode('khachmoi@gmail.com', sent[0].code)); assert(!JSON.stringify(row).includes(`"${sent[0].code}"`));
+        assert(!('dev_code' in info), 'gửi email thật thì KHÔNG trả mã về trình duyệt');
+    });
+    await test('yêu cầu cũ có giờ gửi "ở tương lai" (database đem từ máy khác múi giờ): không bắt chờ hàng giờ, gửi mã mới được ngay', async () => {
+        reset();
+        await Otp.start(data(), new Date(T0.getTime() + 7 * 3600 * 1000)); // lưu lúc "17:00" giờ VN
+        const info = await Otp.start(data(), at(30)); // máy giờ UTC đọc lại lúc "10:00"
+        assert.strictEqual(sent.length, 2); assert.strictEqual(info.resend_in, 60); assert.strictEqual(otpRows.length, 1);
+        await assert.rejects(Otp.start(data(), at(40)), /đợi 50 giây/, 'sau đó thời gian chờ bình thường vẫn áp dụng');
+    });
+    await test('chạy thử chưa cấu hình email: kèm mã (dev_code) để trang web hiện ngay; mã đó xác nhận được', async () => {
+        reset(); devMode = true;
+        const info = await Otp.start(data(), T0);
+        assert.strictEqual(info.dev_code, sent[0].code);
+        const again = await Otp.resend('khachmoi@gmail.com', at(61));
+        assert.strictEqual(again.dev_code, sent[1].code);
+        assert.strictEqual((await Otp.verify('khachmoi@gmail.com', again.dev_code, at(70))).username, 'khachmoi');
     });
     await test('tên đăng nhập / email đã có tài khoản → báo ngay, không gửi mã', async () => {
         reset();
@@ -188,7 +205,9 @@ const rejects = async (p, status, re) => {
         const real = Module._load(src('services/mailer.js'), null); // nạp bản thật (bỏ qua bản giả dùng cho service)
         delete process.env.SMTP_HOST;
         const dev = await H.capture(() => real.sendRegisterOtp({ email: 'a@b.vn', code: '123456', ttlMinutes: 10 }));
-        assert.deepStrictEqual(dev.result, { delivered: false }); assert(dev.logs.some((l) => /123456/.test(l) && /a@b\.vn/.test(l)));
+        assert.deepStrictEqual(dev.result, { delivered: false, dev_code: '123456' }); assert(dev.logs.some((l) => /123456/.test(l) && /a@b\.vn/.test(l)));
+        process.env.OTP_DEV_SHOW_CODE = 'false';
+        try { assert.deepStrictEqual((await H.capture(() => real.sendRegisterOtp({ email: 'a@b.vn', code: '123456', ttlMinutes: 10 }))).result, { delivered: false }); } finally { delete process.env.OTP_DEV_SHOW_CODE; }
         process.env.NODE_ENV = 'production';
         try {
             const { result: e, logs } = await H.capture(() => real.sendRegisterOtp({ email: 'a@b.vn', code: '654321', ttlMinutes: 10 }).catch((x) => x));
@@ -198,7 +217,7 @@ const rejects = async (p, status, re) => {
         Object.assign(process.env, { SMTP_HOST: 'smtp.gmail.com', SMTP_USER: 'shop@gmail.com', SMTP_PASS: '' });
         try {
             const r = await H.capture(() => real.sendRegisterOtp({ email: 'a@b.vn', code: '777777', ttlMinutes: 10 }));
-            assert.deepStrictEqual(r.result, { delivered: false }); assert(r.logs.some((l) => /SMTP_PASS đang trống/.test(l)) && r.logs.some((l) => /777777/.test(l)));
+            assert.deepStrictEqual(r.result, { delivered: false, dev_code: '777777' }); assert(r.logs.some((l) => /SMTP_PASS đang trống/.test(l)) && r.logs.some((l) => /777777/.test(l)));
             assert.strictEqual(real.isConfigured(), false);
         } finally { delete process.env.SMTP_HOST; delete process.env.SMTP_USER; delete process.env.SMTP_PASS; }
     });

@@ -575,6 +575,82 @@ static async countOrdersByUser(userId) {
 }
 }
 
+// ───────────── Đơn hàng của khách (trang "Đơn hàng của tôi") ─────────────
+// Đơn của khách = đơn gắn tài khoản, hoặc đơn đặt lúc chưa đăng nhập có cùng email với tài khoản
+// (email tài khoản đã được xác nhận bằng mã OTP lúc đăng ký nên chắc chắn là của khách).
+const OWNER_SQL = '(user_id = ? OR (user_id IS NULL AND LOWER(customer_email) = LOWER(?)))';
+const CUSTOMER_GROUPS = {
+    pending: ['pending'],
+    processing: ['processing'],
+    shipped: ['shipped'],
+    done: ['delivered', 'completed'],
+    cancelled: ['cancelled']
+};
+// Ghi chú nội bộ của cửa hàng / mã giao dịch không gửi cho khách
+const publicOrder = (o) => {
+    if (!o) return o;
+    const { admin_note, payment_id, user_id, ...rest } = o; // eslint-disable-line no-unused-vars
+    return rest;
+};
+
+OrderModel.CUSTOMER_GROUPS = CUSTOMER_GROUPS;
+OrderModel.publicOrder = publicOrder;
+
+OrderModel.getCustomerOrders = async function getCustomerOrders(userId, email, { group, page = 1, limit = 10 } = {}) {
+    if (group && !CUSTOMER_GROUPS[group]) throw new OrderError('Nhóm đơn hàng không hợp lệ');
+    const owner = [userId, email || ''];
+    const countRows = await db.query(`SELECT status, COUNT(*) AS n FROM orders WHERE ${OWNER_SQL} GROUP BY status`, owner);
+    const counts = { all: 0 };
+    Object.keys(CUSTOMER_GROUPS).forEach((g) => { counts[g] = 0; });
+    for (const r of countRows) {
+        const n = Number(r.n);
+        counts.all += n;
+        const g = Object.keys(CUSTOMER_GROUPS).find((k) => CUSTOMER_GROUPS[k].includes(r.status));
+        if (g) counts[g] += n;
+    }
+    const total = group ? counts[group] : counts.all;
+    const statuses = group ? CUSTOMER_GROUPS[group] : null;
+    const orders = await db.query(
+        `SELECT * FROM orders WHERE ${OWNER_SQL}${statuses ? ` AND status IN (${statuses.map(() => '?').join(', ')})` : ''}
+         ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+        [...owner, ...(statuses || []), limit, (page - 1) * limit]
+    );
+    let items = [];
+    if (orders.length) {
+        items = await db.query(
+            `SELECT order_id, product_id, product_name, product_image, quantity, price, total
+             FROM order_items WHERE order_id IN (${orders.map(() => '?').join(', ')}) ORDER BY id`,
+            orders.map((o) => o.id)
+        );
+    }
+    return {
+        orders: orders.map((o) => ({ ...publicOrder(o), items: items.filter((i) => i.order_id === o.id) })),
+        counts,
+        total,
+        page,
+        limit,
+        pages: Math.max(Math.ceil(total / limit), 1)
+    };
+};
+
+/** Chi tiết 1 đơn của khách (null nếu không phải đơn của khách — không cho biết đơn có tồn tại hay không). */
+OrderModel.getCustomerOrder = async function getCustomerOrder(userId, email, orderCode) {
+    const rows = await db.query(`SELECT * FROM orders WHERE order_code = ? AND ${OWNER_SQL}`, [orderCode, userId, email || '']);
+    const order = rows[0];
+    if (!order) return null;
+    const [items, history] = await Promise.all([
+        this.getOrderItems(order.id),
+        db.query('SELECT old_status, new_status, note, created_at FROM order_status_history WHERE order_id = ? ORDER BY id ASC', [order.id])
+            .catch(() => [])
+    ]);
+    return {
+        ...publicOrder(order),
+        items: items.map(({ id, product_id, product_name, product_image, quantity, price, total }) => ({ id, product_id, product_name, product_image, quantity, price, total })),
+        // Ghi chú khi đổi trạng thái có thể là ghi chú nội bộ: chỉ cho khách xem lý do hủy
+        history: history.map((h) => ({ status: h.new_status, at: h.created_at, note: h.new_status === 'cancelled' ? h.note || null : null }))
+    };
+};
+
 OrderModel.OrderError = OrderError;
 
 module.exports = OrderModel;

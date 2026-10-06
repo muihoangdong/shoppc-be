@@ -61,6 +61,11 @@ async function createAccount(res, data, successMessage) {
     }
 }
 
+/** Thông báo sau khi tạo mã OTP. Chưa cấu hình gửi email (chạy thử): mã hiện ngay trên trang thay vì gửi email. */
+const sentMessage = (info, normal) => (info && info.dev_code
+    ? 'Chưa cấu hình gửi email (SMTP) nên đang ở chế độ chạy thử: mã xác nhận hiện ngay trên trang.'
+    : normal);
+
 class UserController {
     static async login(req, res) {
         try {
@@ -109,7 +114,7 @@ class UserController {
             });
             res.json({
                 success: true,
-                message: `Đã gửi mã xác nhận tới ${info.masked_email}. Vui lòng kiểm tra hộp thư (cả mục Spam/Quảng cáo).`,
+                message: sentMessage(info, `Đã gửi mã xác nhận tới ${info.masked_email}. Vui lòng kiểm tra hộp thư (cả mục Spam/Quảng cáo).`),
                 data: info
             });
         } catch (error) {
@@ -167,7 +172,7 @@ class UserController {
     static async requestEmailChange(req, res) {
         try {
             const info = await EmailChangeOtp.start(req.user.id, req.body || {});
-            res.json({ success: true, message: `Đã gửi mã xác nhận tới ${info.masked_email}.`, data: info });
+            res.json({ success: true, message: sentMessage(info, `Đã gửi mã xác nhận tới ${info.masked_email}.`), data: info });
         } catch (error) {
             sendError(res, error, 'Không gửi được mã xác nhận, vui lòng thử lại sau');
         }
@@ -194,7 +199,7 @@ class UserController {
             const { new_email } = req.body || {};
             if (!isStr(new_email) || !new_email.trim()) return res.status(400).json({ success: false, message: 'Vui lòng nhập email mới' });
             const info = await EmailChangeOtp.resend(req.user.id, new_email);
-            res.json({ success: true, message: `Đã gửi mã mới tới ${info.masked_email}.`, data: info });
+            res.json({ success: true, message: sentMessage(info, `Đã gửi mã mới tới ${info.masked_email}.`), data: info });
         } catch (error) {
             sendError(res, error, 'Không gửi lại được mã, vui lòng thử lại sau');
         }
@@ -206,7 +211,7 @@ class UserController {
             const { email } = req.body || {};
             if (!isStr(email) || !email.trim()) return res.status(400).json({ success: false, message: 'Vui lòng nhập email' });
             const info = await RegistrationOtp.resend(email);
-            res.json({ success: true, message: `Đã gửi mã mới tới ${info.masked_email}.`, data: info });
+            res.json({ success: true, message: sentMessage(info, `Đã gửi mã mới tới ${info.masked_email}.`), data: info });
         } catch (error) {
             sendError(res, error, 'Không gửi lại được mã, vui lòng thử lại sau');
         }

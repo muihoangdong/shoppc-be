@@ -22,7 +22,7 @@ function loadTransport() {
     if (!process.env.SMTP_HOST) return null;
     // Có tài khoản mà chưa có mật khẩu (ví dụ chưa tạo Mật khẩu ứng dụng Gmail): coi như chưa cấu hình, không cố gửi rồi báo lỗi
     if (process.env.SMTP_USER && !process.env.SMTP_PASS) {
-        if (!warnedNoPass) console.warn('[mailer] Có SMTP_USER nhưng SMTP_PASS đang trống: chưa gửi được email (xem mục "Gửi email" trong .env.example).');
+        if (!warnedNoPass) console.warn('[mailer] Có SMTP_USER nhưng SMTP_PASS đang trống: chưa gửi được email, mã OTP chỉ in ra đây. Kiểm tra: npm run mail-check');
         warnedNoPass = true;
         return null;
     }
@@ -33,7 +33,10 @@ function loadTransport() {
             host: process.env.SMTP_HOST,
             port: Number(process.env.SMTP_PORT) || 587,
             secure: Number(process.env.SMTP_PORT) === 465,
-            auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
+            // Gmail hiển thị mật khẩu ứng dụng dạng "abcd efgh ijkl mnop": bỏ dấu cách nếu lỡ dán nguyên
+            auth: process.env.SMTP_USER
+                ? { user: process.env.SMTP_USER, pass: /gmail/i.test(process.env.SMTP_HOST) ? process.env.SMTP_PASS.replace(/\s+/g, '') : process.env.SMTP_PASS }
+                : undefined,
         });
         return cachedTransport;
     } catch {
@@ -85,7 +88,9 @@ async function sendOtpEmail({ email, name, code, ttlMinutes, action, ignoreLine,
             throw new ValidationError(unconfigured, 503);
         }
         console.log(`[mailer] (DEV - chưa cấu hình SMTP) Mã OTP ${action} cho ${email}: ${code}  (hết hạn sau ${ttlMinutes} phút)`);
-        return { delivered: false };
+        // Chạy thử trên máy (chưa có email gửi đi): trả mã về để trang web hiện ngay, không phải mở cửa sổ backend.
+        // Tắt bằng OTP_DEV_SHOW_CODE=false. Production (NODE_ENV=production) không bao giờ tới đây.
+        return process.env.OTP_DEV_SHOW_CODE === 'false' ? { delivered: false } : { delivered: false, dev_code: code };
     }
 
     const hello = name ? `Chào ${name},` : 'Chào bạn,';
@@ -105,6 +110,7 @@ async function sendOtpEmail({ email, name, code, ttlMinutes, action, ignoreLine,
         await transport.sendMail({ from: fromAddress(), to: email, subject: `${code} là mã xác nhận ${action} Shoppc`, text, html });
     } catch (error) {
         console.error('[mailer] Gửi mã OTP thất bại:', error.code || '', error.message);
+        console.error('[mailer] Chạy "npm run mail-check -- <email của bạn>" để xem nguyên nhân và cách sửa.');
         throw new ValidationError('Không gửi được email xác nhận. Vui lòng kiểm tra lại địa chỉ email hoặc thử lại sau ít phút.', 502);
     }
     return { delivered: true };

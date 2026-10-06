@@ -25,6 +25,16 @@ router.post(
     OrderController.createOrder
 );
 
+// Khách đã đăng nhập: lịch sử + theo dõi đơn của mình, tự hủy đơn chưa xác nhận
+router.get('/mine', authenticate, OrderController.myOrders);
+router.get('/mine/:orderCode', authenticate, OrderController.myOrderDetail);
+router.post(
+    '/mine/:orderCode/cancel',
+    authenticate,
+    rateLimit({ windowMs: HOUR, max: 20, message: 'Bạn thao tác quá nhiều lần, vui lòng thử lại sau.' }),
+    OrderController.cancelMyOrder
+);
+
 // Dành cho nhân viên / admin
 router.get('/', authenticate, authorizeStaff, OrderController.getOrders);
 router.get('/dashboard/stats', authenticate, authorizeStaff, OrderController.getDashboardStats);

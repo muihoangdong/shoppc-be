@@ -2,6 +2,7 @@ const OrderModel = require('../models/Order');
 const { getAnalytics, RangeInputError } = require('../services/analytics');
 const Events = require('../realtime/events');
 const Payments = require('../services/payments');
+const UserModel = require('../models/User');
 
 const isStr = (v) => typeof v === 'string';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -171,7 +172,7 @@ class OrderController {
             if (!order || digits(order.customer_phone) !== digits(phone)) return notFound();
 
             const items = await OrderModel.getOrderItems(order.id);
-            res.json({ success: true, data: { ...order, items } });
+            res.json({ success: true, data: { ...OrderModel.publicOrder(order), items } });
         } catch (error) {
             sendError(res, error);
         }
@@ -189,6 +190,54 @@ class OrderController {
             const order = await OrderModel.getOrderByCode(req.params.orderCode);
             if (!order || digits(order.customer_phone) !== digits(phone)) return notFound();
             res.json({ success: true, data: await Payments.paymentInfo(order) });
+        } catch (error) {
+            sendError(res, error);
+        }
+    }
+
+    // ───── Khách đã đăng nhập: lịch sử và theo dõi đơn của mình ─────
+    static async myOrders(req, res) {
+        try {
+            const q = req.query || {};
+            const group = isStr(q.group) && q.group ? q.group : undefined;
+            const page = Math.min(Math.max(parseInt(q.page, 10) || 1, 1), 1000);
+            const user = await UserModel.getUserById(req.user.id);
+            const result = await OrderModel.getCustomerOrders(req.user.id, user?.email, { group, page, limit: 10 });
+            const { orders, ...meta } = result;
+            res.json({ success: true, data: orders, meta });
+        } catch (error) {
+            sendError(res, error);
+        }
+    }
+
+    static async myOrderDetail(req, res) {
+        try {
+            const user = await UserModel.getUserById(req.user.id);
+            const order = isStr(req.params.orderCode) ? await OrderModel.getCustomerOrder(req.user.id, user?.email, req.params.orderCode) : null;
+            if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+            res.json({ success: true, data: order });
+        } catch (error) {
+            sendError(res, error);
+        }
+    }
+
+    /** Khách tự hủy đơn: chỉ khi cửa hàng chưa xác nhận và chưa thanh toán. Hoàn tồn kho + lượt mã giảm giá như khi nhân viên hủy. */
+    static async cancelMyOrder(req, res) {
+        try {
+            const user = await UserModel.getUserById(req.user.id);
+            const order = isStr(req.params.orderCode) ? await OrderModel.getCustomerOrder(req.user.id, user?.email, req.params.orderCode) : null;
+            if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+            if (order.status !== 'pending') {
+                return res.status(409).json({ success: false, message: 'Đơn đã được cửa hàng xác nhận nên không tự hủy được. Vui lòng liên hệ cửa hàng (chat hỗ trợ) để được giúp.' });
+            }
+            if (order.payment_status === 'paid') {
+                return res.status(409).json({ success: false, message: 'Đơn đã thanh toán. Vui lòng liên hệ cửa hàng để hủy và hoàn tiền.' });
+            }
+            const reason = req.body && isStr(req.body.reason) ? req.body.reason.trim().slice(0, 200) : '';
+            const updated = await OrderModel.cancelOrder(order.id, req.user.id, `Khách hủy đơn${reason ? `: ${reason}` : ''}`);
+            Events.orderUpdated(updated, { id: req.user.id, name: user?.full_name || req.user.username });
+            Events.productChanged(); // hủy đơn hoàn lại tồn kho
+            res.json({ success: true, message: 'Đã hủy đơn hàng', data: await OrderModel.getCustomerOrder(req.user.id, user?.email, order.order_code) });
         } catch (error) {
             sendError(res, error);
         }

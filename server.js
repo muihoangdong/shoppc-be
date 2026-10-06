@@ -7,6 +7,7 @@ const { runStartupChecks } = require('./src/config/startupChecks');
 const { hub } = require('./src/realtime/hub');
 const supportService = require('./src/services/support/supportService');
 const { describe: aiDescribe } = require('./src/services/ai/anthropic');
+const mailer = require('./src/services/mailer');
 
 dotenv.config();
 
@@ -77,6 +78,9 @@ const startServer = async () => {
         console.log(`📡 Realtime (SSE): http://localhost:${PORT}/api/realtime/stream`);
         console.log(`💬 Chat hỗ trợ khách hàng: http://localhost:${PORT}/api/support`);
         console.log(`🤖 AI: ${aiDescribe()}`);
+        console.log(mailer.isConfigured()
+            ? `📧 Email: gửi qua ${process.env.SMTP_HOST} (${process.env.SMTP_USER})`
+            : '📧 Email: CHƯA cấu hình SMTP → mã OTP hiện ngay trên trang đăng ký (chế độ chạy thử). Gửi email thật: điền SMTP trong .env, kiểm tra bằng "npm run mail-check"');
         console.log(`\n✨ Ready to accept requests!\n`);
     });
     // Kết nối SSE mở lâu: không để Node tự cắt sau 5 phút mặc định
