@@ -55,6 +55,25 @@ const authenticate = async (req, res, next) => {
     }
 };
 
+/**
+ * Đăng nhập KHÔNG bắt buộc: có token hợp lệ thì gắn req.user, không có / sai / hết hạn thì coi như khách vãng lai
+ * (không trả 401). Dùng cho route công khai cần biết "ai đang xem", ví dụ đặt hàng, xem đánh giá.
+ */
+const optionalAuth = async (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) return next();
+    try {
+        const decoded = verifyAccessToken(authHeader.split(' ')[1]);
+        const user = await UserModel.getUserById(decoded.id);
+        if (user && user.status === 'active') {
+            req.user = { id: user.id, username: user.username, role: user.role };
+        }
+    } catch (error) {
+        // token hỏng / hết hạn: bỏ qua
+    }
+    return next();
+};
+
 // Middleware kiểm tra quyền admin
 const authorizeAdmin = (req, res, next) => {
     if (req.user && hasRole(req.user.role, 'admin')) {
@@ -81,6 +100,7 @@ const authorizeStaff = (req, res, next) => {
 
 module.exports = {
     authenticate,
+    optionalAuth,
     authorizeAdmin,
     authorizeStaff
-};
+};

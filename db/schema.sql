@@ -11,6 +11,7 @@
 --   - products.part_type + products.build_specs: loại linh kiện và thông số để kiểm tra tương thích (trang Build PC)
 --   - thêm bảng email_otps: mã OTP xác nhận email khi đăng ký (tài khoản chỉ được tạo sau khi nhập đúng mã)
 --   - thêm bảng coupons + cột orders.coupon_code: mã giảm giá (theo % hoặc số tiền, đơn tối thiểu, hạn dùng, số lượt)
+--   - thêm bảng product_reviews: đánh giá sản phẩm (chỉ khách đã nhận hàng), mỗi khách 1 đánh giá / sản phẩm
 --   - GIỮ NGUYÊN các cột/bảng cũ code hiện chưa dùng (tracking_number, admin_note, product_sku, shipping_tracking) để không mất dữ liệu
 -- Lưu ý: mỗi bảng KHÔNG có comment bên trong ngoặc CREATE TABLE (bộ phân tích của npm run migrate-db đọc file này).
 -- =====================================================================
@@ -238,4 +239,26 @@ CREATE TABLE IF NOT EXISTS `coupons` (
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_coupons_code` (`code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `product_reviews` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `product_id` int NOT NULL,
+  `user_id` int NOT NULL,
+  `order_id` int DEFAULT NULL,
+  `rating` tinyint NOT NULL,
+  `comment` text,
+  `status` enum('visible','hidden') NOT NULL DEFAULT 'visible',
+  `admin_reply` text,
+  `replied_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_reviews_product_user` (`product_id`,`user_id`),
+  KEY `idx_reviews_product_status` (`product_id`,`status`,`created_at`),
+  KEY `fk_reviews_user` (`user_id`),
+  KEY `fk_reviews_order` (`order_id`),
+  CONSTRAINT `fk_reviews_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_reviews_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_reviews_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

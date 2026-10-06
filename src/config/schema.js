@@ -264,6 +264,11 @@ function classify(plan) {
             message = op.kind === 'create-table'
                 ? 'Thiếu bảng coupons: mã giảm giá (trang quản lý và ô nhập mã khi thanh toán) sẽ báo lỗi.'
                 : `Thiếu ${op.column ? `cột ${op.table}.${op.column}` : describeOp(op)}: đặt hàng có dùng mã giảm giá sẽ báo lỗi.`;
+        } else if (op.table === 'product_reviews') {
+            level = 'warning';
+            message = op.kind === 'create-table'
+                ? 'Thiếu bảng product_reviews: phần đánh giá sản phẩm (trang sản phẩm và trang quản lý đánh giá) sẽ báo lỗi.'
+                : `Bảng product_reviews chưa cập nhật (${describeOp(op)}): đánh giá sản phẩm có thể báo lỗi.`;
         } else if (op.kind === 'add-index') {
             level = 'info';
             message = `Thiếu chỉ mục ${op.name} trên ${op.table} (chỉ làm truy vấn chậm hơn).`;

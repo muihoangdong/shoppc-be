@@ -1,6 +1,6 @@
 const express = require('express');
 const OrderController = require('../controllers/orderController');
-const { authenticate, authorizeStaff } = require('../middlewares/auth');
+const { authenticate, authorizeStaff, optionalAuth } = require('../middlewares/auth');
 const rateLimit = require('../middlewares/rateLimit');
 
 const router = express.Router();
@@ -21,6 +21,7 @@ router.get(
 router.post(
     '/',
     rateLimit({ windowMs: HOUR, max: 15, message: 'Bạn đã đặt quá nhiều đơn trong thời gian ngắn, vui lòng thử lại sau.' }),
+    optionalAuth, // khách đã đăng nhập: gắn đơn vào tài khoản (để được đánh giá sản phẩm đã mua)
     OrderController.createOrder
 );
 

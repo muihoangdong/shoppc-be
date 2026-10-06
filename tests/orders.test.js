@@ -579,7 +579,7 @@ const test = async (name, fn) => {
         assert.deepStrictEqual(Object.keys(detail.history[0]).sort(), feKeys('OrderHistoryEntry'));
         const feItem = feKeys('OrderItem').filter((k) => !['product_image', 'created_at'].includes(k)); // trường tùy chọn ở frontend
         for (const k of feItem) assert(k in detail.items[0], `OrderItem thiếu ${k}`);
-        const feOrder = feKeys('Order').filter((k) => !['note', 'updated_at', 'customer_ward', 'customer_district', 'customer_city'].includes(k));
+        const feOrder = feKeys('Order').filter((k) => !['note', 'updated_at', 'customer_ward', 'customer_district', 'customer_city', 'coupon_code'].includes(k)); // trường tùy chọn (coupon_code: chỉ có khi database đã nâng cấp)
         for (const k of feOrder) assert(k in detail, `Order thiếu ${k}`);
         assert.deepStrictEqual(selectList(/FROM order_status_history h/), ['changed_by', 'changed_by_name', 'created_at', 'id', 'new_status', 'note', 'old_status']);
     });
@@ -707,7 +707,8 @@ const test = async (name, fn) => {
     console.log('Wiring của route');
     await test('route đơn hàng: công khai có giới hạn tần suất; còn lại cần đăng nhập + nhân viên; /analytics trước /:id', () => {
         const publicRoutes = [['get', '/track/:orderCode'], ['post', '/']];
-        for (const [m, p] of publicRoutes) { const h = find(orderRoutes, m, p).handlers; assert.strictEqual(h.length, 2, `${m} ${p}`); assert(!h.includes(Auth.authenticate)); }
+        for (const [m, p] of publicRoutes) { const h = find(orderRoutes, m, p).handlers; assert.strictEqual(h.filter((x) => x !== Auth.optionalAuth).length, 2, `${m} ${p}`); assert(!h.includes(Auth.authenticate)); }
+        assert.strictEqual(find(orderRoutes, 'post', '/').handlers[1], Auth.optionalAuth, 'đặt hàng: biết khách nào đang đăng nhập nhưng không bắt buộc');
         const staffRoutes = [['get', '/'], ['get', '/dashboard/stats'], ['get', '/analytics'], ['get', '/:id(\\d+)'], ['get', '/:id(\\d+)/items'], ['patch', '/:id(\\d+)/status'], ['patch', '/:id(\\d+)/payment']];
         for (const [m, p] of staffRoutes) assert.deepStrictEqual(find(orderRoutes, m, p).handlers.slice(0, 2), [Auth.authenticate, Auth.authorizeStaff], `${m} ${p}`);
         const order = orderRoutes.routes.map((r) => `${r.method} ${r.path}`);

@@ -18,6 +18,7 @@ const aiRoutes = require('./routes/aiRoutes');
 const builderRoutes = require('./routes/builderRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const couponRoutes = require('./routes/couponRoutes');
+const reviewRoutes = require('./routes/reviewRoutes');
 const { hub } = require('./realtime/hub');
 
 const app = express();
@@ -96,6 +97,7 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/builder', builderRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/coupons', couponRoutes);
+app.use('/api/reviews', reviewRoutes);
 
 // 404 handler cho routes không tồn tại
 app.use((req, res) => {

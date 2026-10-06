@@ -2,6 +2,7 @@
 --   1) Xác nhận email bằng mã OTP khi đăng ký và khi đổi email  -> bảng email_otps
 --   2) Trang Build PC (tự chọn cấu hình, kiểm tra tương thích)   -> cột products.part_type, products.build_specs
 --   3) Mã giảm giá                                                -> bảng coupons, cột orders.coupon_code
+--   4) Đánh giá sản phẩm (chỉ khách đã nhận hàng)                 -> bảng product_reviews
 -- Cách dễ nhất (tự phát hiện bước nào còn thiếu, chạy lại không sao):  cd shoppc-be && npm run migrate-db -- --apply
 -- Hoặc chạy file này trong DBeaver / MySQL Workbench. Nên sao lưu trước: mysqldump -u root -p shopdb > backup.sql
 -- Không xóa dữ liệu nào.
@@ -55,7 +56,31 @@ CREATE TABLE IF NOT EXISTS `coupons` (
 ALTER TABLE `orders` ADD COLUMN `coupon_code` varchar(50) DEFAULT NULL AFTER `discount`;
 ALTER TABLE `orders` ADD KEY `idx_orders_coupon` (`coupon_code`);
 
+-- 4. Đánh giá sản phẩm (bỏ qua nếu đã có)
+CREATE TABLE IF NOT EXISTS `product_reviews` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `product_id` int NOT NULL,
+  `user_id` int NOT NULL,
+  `order_id` int DEFAULT NULL,
+  `rating` tinyint NOT NULL,
+  `comment` text,
+  `status` enum('visible','hidden') NOT NULL DEFAULT 'visible',
+  `admin_reply` text,
+  `replied_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_reviews_product_user` (`product_id`,`user_id`),
+  KEY `idx_reviews_product_status` (`product_id`,`status`,`created_at`),
+  KEY `fk_reviews_user` (`user_id`),
+  KEY `fk_reviews_order` (`order_id`),
+  CONSTRAINT `fk_reviews_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_reviews_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_reviews_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Kiểm tra
 SHOW TABLES LIKE 'email_otps';
 SHOW TABLES LIKE 'coupons';
+SHOW TABLES LIKE 'product_reviews';
 SHOW COLUMNS FROM products LIKE 'part_type';

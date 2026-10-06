@@ -42,6 +42,8 @@ module.exports = {
         hub.publish('staff', 'stats:dirty', { reason: 'product:changed' });
     }),
     categoryChanged: safe(() => hub.publish('staff', 'category:changed', {})),
+    /** Khách gửi / sửa đánh giá -> trang Đánh giá của nhân viên tự làm mới. */
+    reviewChanged: safe((review) => hub.publish('staff', 'review:changed', review ? { id: review.id, product_id: review.product_id, rating: review.rating } : {})),
     /** Gửi sự kiện tùy ý tới một kênh. */
     to: safe((channel, event, data) => hub.publish(channel, event, data)),
     _orderBrief: orderBrief
