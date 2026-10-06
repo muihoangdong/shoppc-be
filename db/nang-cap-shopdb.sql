@@ -95,7 +95,7 @@ ALTER TABLE `orders` ADD KEY `idx_orders_phone` (`customer_phone`);
 CREATE TABLE IF NOT EXISTS `email_otps` (
   `id` int NOT NULL AUTO_INCREMENT,
   `email` varchar(150) NOT NULL,
-  `purpose` enum('register') NOT NULL DEFAULT 'register',
+  `purpose` enum('register','change_email') NOT NULL DEFAULT 'register',
   `code_hash` char(64) NOT NULL,
   `payload` json DEFAULT NULL,
   `attempts` int NOT NULL DEFAULT '0',
@@ -108,6 +108,11 @@ CREATE TABLE IF NOT EXISTS `email_otps` (
   UNIQUE KEY `uk_email_otps_email_purpose` (`email`,`purpose`),
   KEY `idx_email_otps_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 18. Thêm cột: products.part_type, products.build_specs (trang Build PC)
+ALTER TABLE `products` ADD COLUMN `part_type` enum('cpu','mainboard','ram','vga','storage','psu','case','cooler') DEFAULT NULL;
+ALTER TABLE `products` ADD COLUMN `build_specs` json DEFAULT NULL;
+ALTER TABLE `products` ADD KEY `idx_products_part_type` (`part_type`);
 
 -- Kiểm tra sau khi chạy (kết quả cột Type phải là enum('pending','processing','shipped','delivered','completed','cancelled')):
 SHOW COLUMNS FROM orders LIKE 'status';

@@ -254,6 +254,18 @@ const test = async (name, fn) => {
         assert.strictEqual(res.code, 503); assert(!/role|truncat|sql/i.test(res.body.message));
         assert(logs.some((l) => l.includes('fix-roles')));
     });
+    await test('khách hàng KHÔNG đổi email trực tiếp qua PUT /users/me (phải qua mã OTP); nhân viên/admin vẫn đổi được; đổi họ tên bình thường', async () => {
+        state.updated.length = 0;
+        const asUser = (u) => ({ user: { id: u.id, username: u.username, role: u.role } });
+        let res = await call(Ctl.updateCurrentUser, { email: 'moi@x.vn' }, asUser(users[2]));
+        assert.strictEqual(res.code, 400); assert(/mã/.test(res.body.message)); assert.strictEqual(state.updated.length, 0);
+        res = await call(Ctl.updateCurrentUser, { full_name: 'Tên Mới', email: 'KHACH@x.vn' }, asUser(users[2]));
+        assert.strictEqual(res.code, 200, 'gửi lại email cũ (khác hoa/thường) kèm họ tên vẫn được');
+        res = await call(Ctl.updateCurrentUser, { email: 'nvmoi2@x.vn' }, asUser(users[1]));
+        assert.strictEqual(res.code, 200); assert.deepStrictEqual(state.updated.at(-1), [2, { full_name: undefined, email: 'nvmoi2@x.vn', avatar: undefined }]);
+        const h = find(userRoutes, 'post', '/me/email').handlers; assert.strictEqual(h[0], Auth.authenticate);
+        assert.strictEqual(find(userRoutes, 'post', '/me/email/verify').handlers.at(-1), Ctl.verifyEmailChange);
+    });
     await test('route POST /api/users: chỉ admin; tạo staff mặc định, role lạ bị từ chối', async () => {
         const h = find(userRoutes, 'post', '/').handlers;
         assert.deepStrictEqual(h.slice(0, 2), [Auth.authenticate, Auth.authorizeAdmin]);

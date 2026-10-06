@@ -16,19 +16,26 @@ const EmailOtp = {
     remove: async (id) => { const i = otpRows.findIndex((x) => x.id === id); if (i >= 0) otpRows.splice(i, 1); },
     purgeOlderThan: async () => {},
 };
-const users = [{ id: 1, username: 'admin', email: 'admin@shoppc.com' }];
+const users = [
+    { id: 1, username: 'admin', email: 'admin@shoppc.com', password: 'pw:admin', status: 'active', full_name: 'Admin' },
+    { id: 2, username: 'khach', email: 'khach@gmail.com', password: 'pw:matkhau1', status: 'active', full_name: 'Khách Cũ' },
+    { id: 3, username: 'khach2', email: 'khach2@gmail.com', password: 'pw:matkhau2', status: 'active', full_name: 'Khách Hai' },
+];
 const User = {
     getUserByUsername: async (n) => users.find((u) => u.username === n),
     getUserByEmail: async (e) => users.find((u) => u.email.toLowerCase() === String(e).toLowerCase()),
+    getUserById: async (id) => users.find((u) => u.id === id),
+    getUserAuthById: async (id) => users.find((u) => u.id === id),
+    verifyPassword: async (u, pw) => u.password === `pw:${pw}`,
+    updateUser: async (id, d) => { Object.assign(users.find((u) => u.id === id), d); return 1; },
 };
 const sent = [];
 let mailFail = false;
-const mailer = {
-    sendRegisterOtp: async (m) => {
-        if (mailFail) { const e = new Error('Không gửi được email xác nhận.'); e.status = 502; e.expose = true; throw e; }
-        sent.push(m); return { delivered: true };
-    },
+const fakeSend = async (m) => {
+    if (mailFail) { const e = new Error('Không gửi được email xác nhận.'); e.status = 502; e.expose = true; throw e; }
+    sent.push(m); return { delivered: true };
 };
+const mailer = { sendRegisterOtp: fakeSend, sendEmailChangeOtp: fakeSend };
 H.install(new Map([
     [src('config/database.js'), { pool: { query: async () => [[]] } }],
     [src('models/EmailOtp.js'), EmailOtp],
@@ -37,6 +44,7 @@ H.install(new Map([
 ]));
 
 const Otp = require(src('services/registrationOtp.js'));
+const Change = require(src('services/emailChangeOtp.js'));
 const { test, done } = H.runner();
 
 const T0 = new Date('2026-10-06T08:00:00Z');
@@ -132,6 +140,45 @@ const rejects = async (p, status, re) => {
     });
     await test('che email: tên ngắn vẫn che được, chuỗi không phải email giữ nguyên', () => {
         assert.strictEqual(Otp.maskEmail('ab@x.vn'), 'a*@x.vn'); assert.strictEqual(Otp.maskEmail('muihoangdong@gmail.com'), 'mu**********@gmail.com'); assert.strictEqual(Otp.maskEmail('abc'), 'abc');
+    });
+
+    console.log('Đổi email (khách hàng)');
+    await test('phải đúng mật khẩu hiện tại; email mới hợp lệ, khác email cũ, chưa ai dùng — sai thì không gửi mã', async () => {
+        reset();
+        await rejects(Change.start(2, { new_email: 'moi@gmail.com', current_password: 'sai' }, T0), 400, /Mật khẩu hiện tại không đúng/);
+        await rejects(Change.start(2, { new_email: 'khong-hop-le', current_password: 'matkhau1' }, T0), 400, /Email không hợp lệ/);
+        await rejects(Change.start(2, { new_email: 'KHACH@gmail.com', current_password: 'matkhau1' }, T0), 400, /trùng với email hiện tại/);
+        await rejects(Change.start(2, { new_email: 'khach2@gmail.com', current_password: 'matkhau1' }, T0), 400, /đã được sử dụng/);
+        await rejects(Change.start(2, { new_email: 'moi@gmail.com' }, T0), 400, /mật khẩu hiện tại/);
+        assert.strictEqual(sent.length, 0);
+    });
+    await test('mã gửi tới EMAIL MỚI; nhập đúng thì đổi email; email cũ giữ nguyên tới lúc đó', async () => {
+        reset();
+        const info = await Change.start(2, { new_email: ' Moi@Gmail.com', current_password: 'matkhau1' }, T0);
+        assert.strictEqual(sent[0].email, 'moi@gmail.com'); assert.strictEqual(sent[0].name, 'Khách Cũ'); assert.strictEqual(info.masked_email, 'mo*@gmail.com');
+        assert.strictEqual(users[1].email, 'khach@gmail.com', 'chưa nhập mã thì chưa đổi');
+        assert.strictEqual(await Change.verify(2, 'moi@gmail.com', sent[0].code, at(20)), 'moi@gmail.com');
+        assert.strictEqual(users[1].email, 'moi@gmail.com'); assert.strictEqual(otpRows.length, 0);
+        users[1].email = 'khach@gmail.com';
+    });
+    await test('tài khoản khác không dùng được yêu cầu/mã của mình (và không làm tốn lượt thử của mình); mã đăng ký không dùng được để đổi email', async () => {
+        reset();
+        await Change.start(2, { new_email: 'moi@gmail.com', current_password: 'matkhau1' }, T0); const code = sent[0].code;
+        await rejects(Change.verify(3, 'moi@gmail.com', code, at(5)), 404);
+        await rejects(Change.resend(3, 'moi@gmail.com', at(100)), 404);
+        assert.strictEqual(otpRows[0].attempts, 0);
+        await Otp.start(data({ email: 'dk@gmail.com' }), T0);
+        await rejects(Change.verify(2, 'dk@gmail.com', sent[1].code, at(5)), 404, /đổi email/);
+        assert.strictEqual(await Change.verify(2, 'moi@gmail.com', code, at(6)), 'moi@gmail.com');
+        users[1].email = 'khach@gmail.com';
+    });
+    await test('gửi lại mã (chờ 60 giây) và mã sai dùng chung giới hạn với đăng ký', async () => {
+        reset();
+        await Change.start(2, { new_email: 'moi@gmail.com', current_password: 'matkhau1' }, T0);
+        await rejects(Change.resend(2, 'moi@gmail.com', at(10)), 429, /đợi 50 giây/);
+        await Change.resend(2, 'moi@gmail.com', at(61)); assert.strictEqual(sent.length, 2);
+        const wrong = sent[1].code === '000000' ? '111111' : '000000';
+        await rejects(Change.verify(2, 'moi@gmail.com', wrong, at(62)), 400, /còn 4 lần/);
     });
 
     console.log('Gửi email thật (mailer)');

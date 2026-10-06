@@ -4,6 +4,8 @@ const v = require('../utils/validate');
 const { sendError } = require('../utils/http');
 const Events = require('../realtime/events');
 
+const { PART_KEYS, parseBuildSpecs } = require('../config/pcParts');
+
 const CATEGORY_TYPES = ['pc', 'component', 'peripheral'];
 
 /** Chuẩn hóa dữ liệu sản phẩm gửi lên. partial=true: chỉ kiểm tra các trường có mặt (khi cập nhật). */
@@ -16,10 +18,16 @@ function parseProduct(body, { partial }) {
         category_id: v.int(b.category_id, 'Danh mục', { min: 1, optional: partial }),
         description: v.str(b.description, 'Mô tả', { max: 5000, optional: true, allowEmpty: true }),
         image_url: v.imageUrl(b.image_url),
-        specs: v.specs(b.specs)
+        specs: v.specs(b.specs),
+        // Build PC: loại linh kiện ('' / null = không phải linh kiện) + thông số kiểm tra tương thích
+        part_type: b.part_type === undefined ? undefined : (b.part_type === '' || b.part_type === null ? null : v.oneOf(b.part_type, 'Loại linh kiện', PART_KEYS)),
+        build_specs: b.build_specs
     };
+    if (out.part_type === null) out.build_specs = null;
+    else if (out.part_type) out.build_specs = parseBuildSpecs(out.part_type, b.build_specs, v.fail);
+    else if (b.build_specs !== undefined) out.build_specs = undefined; // thông số không đi kèm loại: xử lý ở updateProduct
     Object.keys(out).forEach((k) => out[k] === undefined && delete out[k]);
-    if (partial && Object.keys(out).length === 0) v.fail('Không có trường nào cần cập nhật');
+    if (partial && Object.keys(out).length === 0 && b.build_specs === undefined) v.fail('Không có trường nào cần cập nhật');
     return out;
 }
 
@@ -88,6 +96,14 @@ class ProductController {
         try {
             const id = v.idParam(req.params.id);
             const data = parseProduct(req.body, { partial: true });
+            // Chỉ gửi thông số mà không gửi loại: kiểm tra theo loại hiện có của sản phẩm
+            const body = req.body || {};
+            if (body.part_type === undefined && body.build_specs !== undefined) {
+                const current = await ProductModel.getProductById(id);
+                if (!current) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
+                if (!current.part_type) v.fail('Hãy chọn loại linh kiện trước khi nhập thông số Build PC');
+                data.build_specs = parseBuildSpecs(current.part_type, body.build_specs, v.fail);
+            }
             await ensureCategory(data.category_id);
             const affectedRows = await ProductModel.updateProduct(id, data);
             if (affectedRows === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });

@@ -13,6 +13,10 @@ router.post('/register/resend', otpResendLimiter, UserController.resendRegistrat
 router.get('/me', authenticate, UserController.getCurrentUser);
 router.put('/me', authenticate, UserController.updateCurrentUser);
 router.put('/me/password', authenticate, UserController.updatePassword);
+// Đổi email (khách hàng): gửi mã OTP tới email mới -> nhập mã
+router.post('/me/email', authenticate, otpResendLimiter, UserController.requestEmailChange);
+router.post('/me/email/verify', authenticate, otpVerifyLimiter, UserController.verifyEmailChange);
+router.post('/me/email/resend', authenticate, otpResendLimiter, UserController.resendEmailChange);
 
 router.get('/', authenticate, authorizeAdmin, UserController.getAllUsers);
 // Chỉ admin mới tạo được tài khoản nhân viên/quản trị (đăng ký công khai chỉ tạo khách hàng)

@@ -251,9 +251,14 @@ function classify(plan) {
         if (op.kind === 'create-table' && SUPPORT_TABLES.includes(op.table)) {
             level = 'warning';
             message = `Thiếu bảng ${op.table}: chat hỗ trợ khách hàng sẽ báo lỗi.`;
-        } else if (op.kind === 'create-table' && op.table === 'email_otps') {
+        } else if (op.table === 'products' && op.kind === 'add-column' && ['part_type', 'build_specs'].includes(op.column)) {
             level = 'warning';
-            message = 'Thiếu bảng email_otps: đăng ký tài khoản mới (xác nhận email bằng mã OTP) sẽ báo lỗi.';
+            message = `Thiếu cột products.${op.column}: trang Build PC (tự chọn cấu hình) sẽ báo lỗi.`;
+        } else if (op.table === 'email_otps') {
+            level = 'warning';
+            message = op.kind === 'create-table'
+                ? 'Thiếu bảng email_otps: đăng ký tài khoản mới và đổi email (xác nhận bằng mã OTP) sẽ báo lỗi.'
+                : `Bảng email_otps chưa cập nhật (${describeOp(op)}): xác nhận email bằng mã OTP có thể báo lỗi.`;
         } else if (op.kind === 'add-index') {
             level = 'info';
             message = `Thiếu chỉ mục ${op.name} trên ${op.table} (chỉ làm truy vấn chậm hơn).`;

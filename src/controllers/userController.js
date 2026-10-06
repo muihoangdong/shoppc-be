@@ -9,6 +9,7 @@ const {
 } = require('../config/jwt');
 const { sendPasswordReset } = require('../services/mailer');
 const RegistrationOtp = require('../services/registrationOtp');
+const EmailChangeOtp = require('../services/emailChangeOtp');
 const { sendError } = require('../utils/http');
 const { ROLES, DEFAULT_ROLE, USER_STATUSES } = require('../config/roles');
 
@@ -162,6 +163,43 @@ class UserController {
         }
     }
 
+    /** Đổi email bước 1: kiểm tra mật khẩu hiện tại, gửi mã OTP tới email mới. */
+    static async requestEmailChange(req, res) {
+        try {
+            const info = await EmailChangeOtp.start(req.user.id, req.body || {});
+            res.json({ success: true, message: `Đã gửi mã xác nhận tới ${info.masked_email}.`, data: info });
+        } catch (error) {
+            sendError(res, error, 'Không gửi được mã xác nhận, vui lòng thử lại sau');
+        }
+    }
+
+    /** Đổi email bước 2: nhập đúng mã => cập nhật email. */
+    static async verifyEmailChange(req, res) {
+        try {
+            const { new_email, code } = req.body || {};
+            if (!isStr(new_email) || !isStr(code) || !new_email.trim() || !code.trim()) {
+                return res.status(400).json({ success: false, message: 'Vui lòng nhập email mới và mã xác nhận' });
+            }
+            await EmailChangeOtp.verify(req.user.id, new_email, code);
+            const user = await UserModel.getUserById(req.user.id);
+            res.json({ success: true, message: 'Đổi email thành công', data: user });
+        } catch (error) {
+            if (error && error.code === 'ER_DUP_ENTRY') return res.status(409).json({ success: false, message: 'Email đã được sử dụng' });
+            sendError(res, error, 'Không đổi được email, vui lòng thử lại sau');
+        }
+    }
+
+    static async resendEmailChange(req, res) {
+        try {
+            const { new_email } = req.body || {};
+            if (!isStr(new_email) || !new_email.trim()) return res.status(400).json({ success: false, message: 'Vui lòng nhập email mới' });
+            const info = await EmailChangeOtp.resend(req.user.id, new_email);
+            res.json({ success: true, message: `Đã gửi mã mới tới ${info.masked_email}.`, data: info });
+        } catch (error) {
+            sendError(res, error, 'Không gửi lại được mã, vui lòng thử lại sau');
+        }
+    }
+
     /** Gửi lại mã OTP đăng ký (có thời gian chờ và giới hạn số lần). */
     static async resendRegistrationOtp(req, res) {
         try {
@@ -235,7 +273,18 @@ class UserController {
     static async updateCurrentUser(req, res) {
         try {
             const userId = req.user.id;
-            const { full_name, email, avatar } = req.body;
+            const { full_name, email, avatar } = req.body || {};
+            // Khách hàng đổi email phải xác nhận bằng mã OTP gửi tới email mới (POST /users/me/email).
+            // Tài khoản nhân viên/admin do admin tạo nên vẫn đổi trực tiếp như trước.
+            if (email !== undefined && req.user.role === DEFAULT_ROLE) {
+                const current = await UserModel.getUserById(userId);
+                if (!current || !isStr(email) || email.trim().toLowerCase() !== String(current.email).toLowerCase()) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Đổi email cần xác nhận bằng mã gửi tới email mới. Vui lòng dùng chức năng "Đổi email".'
+                    });
+                }
+            }
             if (email) {
                 const existing = await UserModel.getUserByEmail(email);
                 if (existing && existing.id !== userId) {

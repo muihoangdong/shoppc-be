@@ -4,20 +4,20 @@ class Product {
     static normalizeProduct(row) {
         if (!row) return row;
 
-        let specs = row.specs;
-
         // MySQL JSON tự parse thành object, nhưng xử lý thêm cho chắc
-        if (typeof specs === 'string') {
+        const parse = (v) => {
+            if (typeof v !== 'string') return v;
             try {
-                specs = JSON.parse(specs);
+                return JSON.parse(v);
             } catch {
-                specs = {};
+                return null;
             }
-        }
+        };
 
         return {
             ...row,
-            specs: specs || {}
+            specs: parse(row.specs) || {},
+            ...(row.build_specs !== undefined ? { build_specs: parse(row.build_specs) || null } : {})
         };
     }
 
@@ -143,6 +143,31 @@ class Product {
         return rows.map(this.normalizeProduct);
     }
 
+    /** Linh kiện cho trang Build PC theo loại (rẻ trước). */
+    static async getBuilderParts(partType) {
+        const rows = await db.query(
+            `SELECT p.id, p.name, p.price, p.stock, p.image_url, p.part_type, p.build_specs, p.specs, c.name AS category_name
+             FROM products p
+             LEFT JOIN categories c ON p.category_id = c.id
+             WHERE p.part_type = ?
+             ORDER BY p.price ASC`,
+            [partType]
+        );
+        return rows.map(this.normalizeProduct);
+    }
+
+    /** Lấy nhiều linh kiện theo id (để kiểm tra một cấu hình). */
+    static async getBuilderPartsByIds(ids) {
+        if (!ids.length) return [];
+        const rows = await db.query(
+            `SELECT p.id, p.name, p.price, p.stock, p.image_url, p.part_type, p.build_specs, p.specs
+             FROM products p
+             WHERE p.id IN (${ids.map(() => '?').join(', ')})`,
+            ids
+        );
+        return rows.map(this.normalizeProduct);
+    }
+
     static async createProduct(productData) {
         const {
             name,
@@ -151,14 +176,16 @@ class Product {
             stock = 0,
             category_id,
             image_url = null,
-            specs = {}
+            specs = {},
+            part_type = null,
+            build_specs = null
         } = productData;
 
         const [result] = await db.pool.query(
             `INSERT INTO products (
                 name, description, price, stock,
-                category_id, image_url, specs
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                category_id, image_url, specs, part_type, build_specs
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 name,
                 description,
@@ -166,7 +193,9 @@ class Product {
                 stock,
                 category_id,
                 image_url,
-                JSON.stringify(specs || {})
+                JSON.stringify(specs || {}),
+                part_type || null,
+                build_specs ? JSON.stringify(build_specs) : null
             ]
         );
 
@@ -181,19 +210,21 @@ class Product {
             'stock',
             'category_id',
             'image_url',
-            'specs'
+            'specs',
+            'part_type',
+            'build_specs'
         ];
 
         const entries = Object.entries(productData)
             .filter(([key, value]) =>
                 allowed.includes(key) && value !== undefined
             )
-            .map(([key, value]) => [
-                key,
-                key === 'specs'
-                    ? JSON.stringify(value || {})
-                    : value
-            ]);
+            .map(([key, value]) => {
+                if (key === 'specs') return [key, JSON.stringify(value || {})];
+                if (key === 'build_specs') return [key, value ? JSON.stringify(value) : null];
+                if (key === 'part_type') return [key, value || null];
+                return [key, value];
+            });
 
         if (entries.length === 0) return 0;
 

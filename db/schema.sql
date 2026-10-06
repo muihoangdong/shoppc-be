@@ -8,6 +8,7 @@
 --       (bản cũ là pending | confirmed | processing | shipping | delivered | cancelled nên không lưu được "Đang giao"/"Hoàn tất")
 --   - thêm chỉ mục cho các truy vấn thống kê/tìm kiếm đơn hàng, tồn kho thấp, giỏ hàng
 --   - thêm bảng chat hỗ trợ khách hàng: support_conversations, support_messages
+--   - products.part_type + products.build_specs: loại linh kiện và thông số để kiểm tra tương thích (trang Build PC)
 --   - thêm bảng email_otps: mã OTP xác nhận email khi đăng ký (tài khoản chỉ được tạo sau khi nhập đúng mã)
 --   - GIỮ NGUYÊN các cột/bảng cũ code hiện chưa dùng (tracking_number, admin_note, product_sku, shipping_tracking) để không mất dữ liệu
 -- Lưu ý: mỗi bảng KHÔNG có comment bên trong ngoặc CREATE TABLE (bộ phân tích của npm run migrate-db đọc file này).
@@ -56,10 +57,13 @@ CREATE TABLE IF NOT EXISTS `products` (
   `specs` json DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `part_type` enum('cpu','mainboard','ram','vga','storage','psu','case','cooler') DEFAULT NULL,
+  `build_specs` json DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `category_id` (`category_id`),
   CONSTRAINT `products_ibfk_1` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`),
-  KEY `idx_products_stock` (`stock`)
+  KEY `idx_products_stock` (`stock`),
+  KEY `idx_products_part_type` (`part_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS `cart_items` (
@@ -199,7 +203,7 @@ CREATE TABLE IF NOT EXISTS `support_messages` (
 CREATE TABLE IF NOT EXISTS `email_otps` (
   `id` int NOT NULL AUTO_INCREMENT,
   `email` varchar(150) NOT NULL,
-  `purpose` enum('register') NOT NULL DEFAULT 'register',
+  `purpose` enum('register','change_email') NOT NULL DEFAULT 'register',
   `code_hash` char(64) NOT NULL,
   `payload` json DEFAULT NULL,
   `attempts` int NOT NULL DEFAULT '0',
