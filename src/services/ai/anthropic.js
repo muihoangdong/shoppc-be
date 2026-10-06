@@ -24,7 +24,9 @@ const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const PROVIDERS = ['anthropic', 'gemini', 'gemini-openai', 'ollama', 'openai-compatible'];
 const DEFAULT_BASE = { ollama: 'http://localhost:11434/v1', 'gemini-openai': `${GEMINI_URL}/openai` };
 // gemini-2.5-* bị Google tắt từ 16/10/2026 nên mặc định dùng đời 3.5; nếu model không tồn tại với key của bạn thì tự thử các model sau
-const GEMINI_FALLBACK_MODELS = ['gemini-3.5-flash', 'gemini-flash-latest', 'gemini-3-flash-preview', 'gemini-2.5-flash'];
+// Model chính + dự phòng (khi model không tồn tại / quá tải / hết lượt). Bản "lite" ít bị quá tải hơn.
+// Không còn gemini-2.5-*: Google đã ngừng cấp cho người dùng mới.
+const GEMINI_FALLBACK_MODELS = ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
 const DEFAULT_MODEL = { anthropic: 'claude-sonnet-5-5', ollama: 'qwen2.5:7b', gemini: GEMINI_FALLBACK_MODELS[0], 'gemini-openai': GEMINI_FALLBACK_MODELS[0] };
 
 const isGemini = (p) => p === 'gemini' || p === 'gemini-openai';
@@ -315,12 +317,15 @@ async function callGemini({ system, tools, messages, maxTokens }) {
         }
     };
 
-    // Thử lần lượt: model người dùng đặt (hoặc model đã dò được) → các model dự phòng nếu model mặc định không tồn tại
+    // Thử lần lượt: model người dùng đặt (hoặc model đã dò được) → các model dự phòng khi model không tồn tại,
+    // đang quá tải (503/500) hoặc hết lượt miễn phí của riêng model đó (429)
     const candidates = userModel()
         ? [userModel()]
         : [...new Set([resolvedGeminiModel || GEMINI_FALLBACK_MODELS[0], ...GEMINI_FALLBACK_MODELS])];
 
     let last;
+    let onlyMissing = true; // các model trước đều "không tồn tại" (404) => nhớ model dùng được cho lần sau
+    let lastBusy = null; // lần cuối gặp model quá tải / hết lượt (để báo đúng lỗi nếu mọi model đều không được)
     for (const model of candidates) {
         let withThinking = true;
         let retried5xx = false;
@@ -337,8 +342,13 @@ async function callGemini({ system, tools, messages, maxTokens }) {
                     continue;
                 }
                 if (!userModel() && model !== candidates[0]) {
-                    console.warn(`[ai] Model Gemini "${candidates[0]}" không dùng được với key này, chuyển sang "${model}".`);
-                    resolvedGeminiModel = model;
+                    if (onlyMissing) {
+                        console.warn(`[ai] Model Gemini "${candidates[0]}" không dùng được với key này, chuyển sang "${model}".`);
+                        resolvedGeminiModel = model;
+                    } else {
+                        // quá tải / hết lượt chỉ là tạm thời: lần sau vẫn thử model chính trước
+                        console.warn(`[ai] Model Gemini "${candidates[0]}" đang bận, tạm dùng "${model}".`);
+                    }
                 }
                 return out;
             }
@@ -356,9 +366,14 @@ async function callGemini({ system, tools, messages, maxTokens }) {
             }
             break;
         }
-        if (last.res.status !== 404) break; // chỉ lỗi "không có model" mới thử model dự phòng
+        const st = last.res.status;
+        if (st === 404) continue; // model không tồn tại: thử model dự phòng
+        if (st === 429 || st === 500 || st === 503) { onlyMissing = false; lastBusy = last; continue; } // model đang bận: thử model khác
+        break;
     }
 
+    // Có model bận và các model còn lại không tồn tại: báo "quá tải / hết lượt" (đúng bản chất) thay vì "không có model"
+    if (last.res.status === 404 && lastBusy) last = lastBusy;
     const { res, body } = last;
     const detail = String(body || '').replace(/\s+/g, ' ').slice(0, 500);
     console.error('[ai] gemini error', res.status, detail);

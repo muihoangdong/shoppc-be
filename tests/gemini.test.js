@@ -116,10 +116,10 @@ const FORBIDDEN = ['additionalProperties', '$schema', 'default', 'examples', 'ti
     await test('model mặc định không có (404) → tự thử model dự phòng và nhớ lại; AI_MODEL tự đặt mà sai thì báo rõ, không đổi model', async () => {
         gem(); queue = [{ status: 404, body: 'models/gemini-3.5-flash is not found' }, gText('ok')];
         const { result, logs } = await H.capture(() => AI.callModel({ system: 's', messages: [] }));
-        assert.strictEqual(result.content[0].text, 'ok'); assert(/gemini-flash-latest:generateContent$/.test(log[1].url), log[1].url);
-        assert(logs.some((l) => /chuyển sang "gemini-flash-latest"/.test(l)));
-        assert.strictEqual(AI.modelName(), 'gemini-flash-latest'); log = []; queue = [gText('ok')]; await AI.callModel({ system: 's', messages: [] });
-        assert(/gemini-flash-latest:generateContent$/.test(log[0].url), 'lần sau đi thẳng model đã dò được');
+        assert.strictEqual(result.content[0].text, 'ok'); assert(log[1].url.endsWith(`${AI.GEMINI_FALLBACK_MODELS[1]}:generateContent`), log[1].url);
+        assert(logs.some((l) => l.includes(`chuyển sang "${AI.GEMINI_FALLBACK_MODELS[1]}"`)));
+        assert.strictEqual(AI.modelName(), AI.GEMINI_FALLBACK_MODELS[1]); log = []; queue = [gText('ok')]; await AI.callModel({ system: 's', messages: [] });
+        assert(log[0].url.endsWith(`${AI.GEMINI_FALLBACK_MODELS[1]}:generateContent`), 'lần sau đi thẳng model đã dò được');
         gem(); queue = AI.GEMINI_FALLBACK_MODELS.map(() => ({ status: 404, body: 'not found' }));
         let e = await quiet(() => AI.callModel({ system: 's', messages: [] }).catch((x) => x)); assert.strictEqual(log.length, AI.GEMINI_FALLBACK_MODELS.length); assert(/Không tìm được model Gemini/.test(e.message), e.message);
         gem({ AI_MODEL: 'gemini-9' }); queue = [{ status: 404, body: 'not found' }];
@@ -129,8 +129,24 @@ const FORBIDDEN = ['additionalProperties', '$schema', 'default', 'examples', 'ti
         gem(); queue = [{ status: 400, body: 'Thinking level is not supported for this model.' }, gText('ok')];
         let r = await quiet(() => AI.callModel({ system: 's', messages: [] })); assert.strictEqual(r.content[0].text, 'ok'); assert(log[0].body.generationConfig.thinkingConfig); assert(!log[1].body.generationConfig.thinkingConfig);
         gem(); queue = [{ status: 503, body: 'The model is overloaded' }, gText('ok')]; r = await AI.callModel({ system: 's', messages: [] }); assert.strictEqual(r.content[0].text, 'ok'); assert.strictEqual(log.length, 2);
-        gem(); queue = [{ status: 503, body: 'overloaded' }, { status: 503, body: 'overloaded' }];
-        const e = await quiet(() => AI.callModel({ system: 's', messages: [] }).catch((x) => x)); assert.strictEqual(e.status, 503); assert.strictEqual(log.length, 2, 'chỉ thử lại một lần');
+        // model chính vẫn quá tải sau khi thử lại → tạm dùng model dự phòng (không nhớ: lần sau vẫn thử model chính trước)
+        gem(); queue = [{ status: 503, body: 'overloaded' }, { status: 503, body: 'overloaded' }, gText('ok2')];
+        r = await quiet(() => AI.callModel({ system: 's', messages: [] })); assert.strictEqual(r.content[0].text, 'ok2'); assert.strictEqual(log.length, 3, 'mỗi model chỉ thử lại một lần');
+        assert(log[2].url.endsWith(`${AI.GEMINI_FALLBACK_MODELS[1]}:generateContent`), log[2].url);
+        log = []; queue = [gText('ok3')]; await AI.callModel({ system: 's', messages: [] }); assert(/gemini-3\.5-flash:generateContent$/.test(log[0].url), 'lần sau vẫn thử model chính trước');
+        // hết lượt (429) của model chính → chuyển ngay sang model khác, không chờ
+        gem(); queue = [{ status: 429, body: 'RESOURCE_EXHAUSTED' }, gText('ok4')];
+        r = await quiet(() => AI.callModel({ system: 's', messages: [] })); assert.strictEqual(r.content[0].text, 'ok4'); assert.strictEqual(log.length, 2);
+        // mọi model đều quá tải → báo lỗi 503
+        gem(); queue = Array(AI.GEMINI_FALLBACK_MODELS.length * 2).fill({ status: 503, body: 'overloaded' });
+        const e = await quiet(() => AI.callModel({ system: 's', messages: [] }).catch((x) => x)); assert.strictEqual(e.status, 503); assert.strictEqual(log.length, AI.GEMINI_FALLBACK_MODELS.length * 2);
+        // model chính quá tải, các model còn lại không tồn tại → báo "quá tải" (không phải "không có model")
+        gem(); queue = [{ status: 503, body: 'overloaded' }, { status: 503, body: 'overloaded' }, ...AI.GEMINI_FALLBACK_MODELS.slice(1).map(() => ({ status: 404, body: 'not found' }))];
+        const e3 = await quiet(() => AI.callModel({ system: 's', messages: [] }).catch((x) => x)); assert.strictEqual(e3.status, 503, e3.message); assert(/quá tải/.test(e3.message), e3.message);
+        assert(!AI.GEMINI_FALLBACK_MODELS.some((m) => m.startsWith('gemini-2.5')), 'không dùng model Google đã ngừng');
+        // AI_MODEL tự đặt: không đổi model
+        gem({ AI_MODEL: 'gemini-3.5-flash' }); queue = [{ status: 503, body: 'overloaded' }, { status: 503, body: 'overloaded' }];
+        const e2 = await quiet(() => AI.callModel({ system: 's', messages: [] }).catch((x) => x)); assert.strictEqual(e2.status, 503); assert.strictEqual(log.length, 2);
         gem(); queue = [{ candidates: [{ finishReason: 'MALFORMED_FUNCTION_CALL' }] }, gText('ok')]; r = await quiet(() => AI.callModel({ system: 's', messages: [] })); assert.strictEqual(r.content[0].text, 'ok');
     });
     await test('lỗi Google được dịch sang tiếng Việt, không lộ key', async () => {
@@ -143,7 +159,7 @@ const FORBIDDEN = ['additionalProperties', '$schema', 'default', 'examples', 'ti
             [{ status: 418, body: 'teapot' }, 502, /mã 418/],
         ];
         for (const [resp, code, re] of cases) {
-            gem(); queue = [resp];
+            gem(); queue = Array(AI.GEMINI_FALLBACK_MODELS.length).fill(resp); // 429: thử hết các model dự phòng rồi mới báo lỗi
             const e = await quiet(() => AI.callModel({ system: 's', messages: [] }).catch((x) => x));
             assert.strictEqual(e.status, code, resp.body); assert(re.test(e.message), `${resp.status}: ${e.message}`); assert(!/AIza-secret-key/.test(e.message));
         }

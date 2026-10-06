@@ -17,7 +17,7 @@ Chatbot nằm ở góc phải dưới của trang admin. Người dùng chat b�
 
 Chi tiết kỹ thuật:
 - Backend gọi **API gốc** của Gemini (`models/{model}:generateContent`, key gửi qua header `x-goog-api-key`), không qua endpoint kiểu OpenAI. Nhờ vậy giữ được `thoughtSignature` mà Gemini 3.x bắt buộc gửi lại khi chatbot gọi công cụ nhiều bước (thiếu nó Google báo lỗi 400).
-- Model mặc định `gemini-3.5-flash`. Nếu key của bạn chưa dùng được model đó (404), server tự thử `gemini-flash-latest` → `gemini-3-flash-preview` → `gemini-2.5-flash` và nhớ model chạy được. Tự đặt `AI_MODEL` thì không tự đổi.
+- Model mặc định `gemini-3.5-flash`. Nếu model đó không dùng được với key (404) **hoặc đang quá tải / hết lượt (503, 429)**, server tự thử `gemini-3-flash-preview` → `gemini-3.5-flash-lite` → `gemini-flash-latest` → `gemini-3.1-flash-lite`. Model không tồn tại thì nhớ model chạy được; quá tải chỉ là tạm thời nên lần sau vẫn thử model chính trước. Tự đặt `AI_MODEL` thì không tự đổi.
 - Các model `gemini-2.5-*` bị Google tắt từ **16/10/2026**: nếu `.env` đang có `AI_MODEL=gemini-2.5-flash`, hãy xóa dòng đó.
 - "Suy nghĩ": đời 3.x dùng mức `LOW` (đổi bằng `AI_THINKING_LEVEL=minimal|low|medium|high`), đời 2.5 Flash tắt hẳn. Model không nhận tham số này thì server tự gửi lại không kèm.
 - Google quá tải tạm thời (500/503) thì tự thử lại một lần; lời gọi công cụ bị Gemini sinh hỏng (`MALFORMED_FUNCTION_CALL`) cũng thử lại một lần.
