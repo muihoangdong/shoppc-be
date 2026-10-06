@@ -16,6 +16,7 @@ const realtimeRoutes = require('./routes/realtimeRoutes');
 const supportRoutes = require('./routes/supportRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const builderRoutes = require('./routes/builderRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
 const { hub } = require('./realtime/hub');
 
 const app = express();
@@ -92,6 +93,7 @@ app.use('/api/realtime', realtimeRoutes);
 app.use('/api/support', supportRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/builder', builderRoutes);
+app.use('/api/payments', paymentRoutes);
 
 // 404 handler cho routes không tồn tại
 app.use((req, res) => {

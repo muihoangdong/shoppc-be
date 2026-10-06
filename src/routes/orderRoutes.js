@@ -13,6 +13,11 @@ router.get(
     rateLimit({ windowMs: 10 * 60 * 1000, max: 30, message: 'Bạn tra cứu quá nhiều lần, vui lòng thử lại sau ít phút.' }),
     OrderController.trackOrder
 );
+router.get(
+    '/payment/:orderCode',
+    rateLimit({ windowMs: 10 * 60 * 1000, max: 120, message: 'Bạn tải trang thanh toán quá nhiều lần, vui lòng thử lại sau ít phút.' }),
+    OrderController.getPayment
+);
 router.post(
     '/',
     rateLimit({ windowMs: HOUR, max: 15, message: 'Bạn đã đặt quá nhiều đơn trong thời gian ngắn, vui lòng thử lại sau.' }),

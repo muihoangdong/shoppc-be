@@ -1,6 +1,7 @@
 const OrderModel = require('../models/Order');
 const { getAnalytics, RangeInputError } = require('../services/analytics');
 const Events = require('../realtime/events');
+const Payments = require('../services/payments');
 
 const isStr = (v) => typeof v === 'string';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -167,6 +168,23 @@ class OrderController {
 
             const items = await OrderModel.getOrderItems(order.id);
             res.json({ success: true, data: { ...order, items } });
+        } catch (error) {
+            sendError(res, error);
+        }
+    }
+
+    /**
+     * Thông tin thanh toán của đơn (công khai, cần kèm SĐT như tra cứu đơn): số tiền, tài khoản nhận,
+     * nội dung chuyển khoản và mã VietQR. Trang của khách gọi lại định kỳ để biết đã nhận tiền chưa.
+     */
+    static async getPayment(req, res) {
+        try {
+            const notFound = () => res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+            const phone = req.query && req.query.phone;
+            if (!isStr(req.params.orderCode) || !isStr(phone) || digits(phone).length < 8) return notFound();
+            const order = await OrderModel.getOrderByCode(req.params.orderCode);
+            if (!order || digits(order.customer_phone) !== digits(phone)) return notFound();
+            res.json({ success: true, data: await Payments.paymentInfo(order) });
         } catch (error) {
             sendError(res, error);
         }
