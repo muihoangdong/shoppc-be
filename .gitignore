@@ -14,6 +14,11 @@ pnpm-debug.log*
 .env.*
 !.env.example
 
+# bản sao lưu / dump database (chứa email và mật khẩu đã băm của người dùng)
+db/shopdb-*.sql
+backup*.sql
+*.dump.sql
+
 # build output
 dist/
 build/

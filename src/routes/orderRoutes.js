@@ -1,14 +1,53 @@
 const express = require('express');
 const OrderController = require('../controllers/orderController');
-const { authenticate, authorizeStaff } = require('../middlewares/auth');
+const { authenticate, authorizeStaff, optionalAuth } = require('../middlewares/auth');
+const rateLimit = require('../middlewares/rateLimit');
 
 const router = express.Router();
 
-router.get('/track/:orderCode', OrderController.trackOrder);
-router.post('/', OrderController.createOrder);
+const HOUR = 60 * 60 * 1000;
+
+// Công khai: tra cứu đơn (cần kèm số điện thoại) và đặt hàng — có giới hạn tần suất chống dò mã đơn / spam đơn giả
+router.get(
+    '/track/:orderCode',
+    rateLimit({ windowMs: 10 * 60 * 1000, max: 30, message: 'Bạn tra cứu quá nhiều lần, vui lòng thử lại sau ít phút.' }),
+    OrderController.trackOrder
+);
+router.get(
+    '/payment/:orderCode',
+    rateLimit({ windowMs: 10 * 60 * 1000, max: 120, message: 'Bạn tải trang thanh toán quá nhiều lần, vui lòng thử lại sau ít phút.' }),
+    OrderController.getPayment
+);
+router.post(
+    '/payment/:orderCode/claim',
+    rateLimit({ windowMs: 10 * 60 * 1000, max: 10, message: 'Bạn thao tác quá nhiều lần, vui lòng thử lại sau ít phút.' }),
+    OrderController.claimPayment
+);
+router.post(
+    '/',
+    rateLimit({ windowMs: HOUR, max: 15, message: 'Bạn đã đặt quá nhiều đơn trong thời gian ngắn, vui lòng thử lại sau.' }),
+    optionalAuth, // khách đã đăng nhập: gắn đơn vào tài khoản (để được đánh giá sản phẩm đã mua)
+    OrderController.createOrder
+);
+
+// Khách đã đăng nhập: lịch sử + theo dõi đơn của mình, tự hủy đơn chưa xác nhận
+router.get('/mine', authenticate, OrderController.myOrders);
+router.get('/mine/:orderCode', authenticate, OrderController.myOrderDetail);
+router.post(
+    '/mine/:orderCode/cancel',
+    authenticate,
+    rateLimit({ windowMs: HOUR, max: 20, message: 'Bạn thao tác quá nhiều lần, vui lòng thử lại sau.' }),
+    OrderController.cancelMyOrder
+);
+
+// Dành cho nhân viên / admin
 router.get('/', authenticate, authorizeStaff, OrderController.getOrders);
 router.get('/dashboard/stats', authenticate, authorizeStaff, OrderController.getDashboardStats);
-router.get('/:id/items', authenticate, authorizeStaff, OrderController.getOrderItems);
-router.patch('/:id/status', authenticate, authorizeStaff, OrderController.updateOrderStatus);
+router.get('/analytics', authenticate, authorizeStaff, OrderController.getAnalytics);
+router.get('/:id(\\d+)', authenticate, authorizeStaff, OrderController.getOrderById);
+router.get('/:id(\\d+)/items', authenticate, authorizeStaff, OrderController.getOrderItems);
+router.patch('/:id(\\d+)/status', authenticate, authorizeStaff, OrderController.updateOrderStatus);
+router.patch('/:id(\\d+)/payment', authenticate, authorizeStaff, OrderController.updatePaymentStatus);
+router.patch('/:id(\\d+)/payment-claim', authenticate, authorizeStaff, OrderController.rejectPaymentClaim);
 
 module.exports = router;

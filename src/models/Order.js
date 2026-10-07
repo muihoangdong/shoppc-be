@@ -1,11 +1,40 @@
+
+
 const db = require('../config/database');
+const {
+    ORDER_STATUSES,
+    STATUS_LABELS,
+    REVENUE_STATUSES,
+    PAYMENT_METHODS,
+    PAYMENT_STATUSES,
+    canTransition,
+    TRANSITIONS
+} = require('../config/orderStatus');
+const { computeShippingFee } = require('../config/shipping');
+const { getTopProducts, resolveRange, todayYmd, addDays } = require('../services/analytics');
+const Coupons = require('../services/coupons');
+const CouponModel = require('./Coupon');
+
+/** Lỗi nghiệp vụ có mã HTTP; `expose` = thông báo an toàn để hiển thị cho người dùng. */
+class OrderError extends Error {
+    constructor(message, status = 400) {
+        super(message);
+        this.status = status;
+        this.expose = true;
+    }
+}
+
+const isStr = (v) => typeof v === 'string';
+const isYmd = (v) => isStr(v) && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v));
 
 class OrderModel {
     static async createOrderFromCart(orderData) {
         const client = await db.getClient();
+
         try {
-            await client.query('BEGIN');
-            
+            // Bắt đầu transaction MySQL
+            await client.beginTransaction();
+
             const {
                 session_id,
                 user_id = null,
@@ -18,94 +47,165 @@ class OrderModel {
                 customer_city,
                 note = null,
                 payment_method = 'cod',
-                shipping_fee = 0,
-                discount = 0,
+                coupon_code = null,
             } = orderData;
 
+            // Phí ship và giảm giá do SERVER quyết định: mọi giá trị client gửi lên đều bị bỏ qua
+            if (!PAYMENT_METHODS.includes(payment_method)) {
+                throw new OrderError('Phương thức thanh toán không hợp lệ');
+            }
+
             // Lấy giỏ hàng
-            const cartResult = await client.query(
+            const [cartItems] = await client.query(
                 `SELECT ci.product_id, ci.quantity, p.name, p.price, p.stock, p.image_url
                  FROM cart_items ci
                  JOIN products p ON ci.product_id = p.id
-                 WHERE ci.session_id = $1`,
+                 WHERE ci.session_id = ?`,
                 [session_id]
             );
-
-            const cartItems = cartResult.rows;
 
             if (!cartItems.length) {
                 throw new Error('Giỏ hàng đang trống');
             }
 
-            // Kiểm tra tồn kho với row lock
+            // Kiểm tra tồn kho
             for (const item of cartItems) {
-                const productResult = await client.query(
-                    'SELECT id, stock FROM products WHERE id = $1 FOR UPDATE',
+                const [products] = await client.query(
+                    'SELECT id, stock FROM products WHERE id = ? FOR UPDATE',
                     [item.product_id]
                 );
-                const product = productResult.rows[0];
+
+                const product = products[0];
+
                 if (!product || product.stock < item.quantity) {
                     throw new Error(`Sản phẩm ${item.name} không đủ tồn kho`);
                 }
             }
 
             // Tính toán
-            const subtotal = cartItems.reduce((sum, item) => sum + parseFloat(item.price) * parseInt(item.quantity), 0);
-            const total_amount = subtotal - parseFloat(discount || 0) + parseFloat(shipping_fee || 0);
+            const subtotal = cartItems.reduce(
+                (sum, item) =>
+                    sum + parseFloat(item.price) * parseInt(item.quantity),
+                0
+            );
+
+            // Mã giảm giá: khóa dòng mã đến hết transaction để hai đơn cùng lúc không vượt số lượt
+            let discount = 0;
+            let coupon = null;
+            if (coupon_code) {
+                const code = Coupons.normalizeCode(coupon_code);
+                if (code) {
+                    const [rows] = await client.query(`SELECT ${CouponModel.COLUMNS} FROM coupons WHERE code = ? FOR UPDATE`, [code]);
+                    coupon = rows[0] || null;
+                }
+                const usedByCustomer = coupon && Number(coupon.once_per_customer)
+                    ? Coupons.customerHasUsed(await CouponModel.ordersUsing(coupon.code, client), { phone: customer_phone, email: customer_email })
+                    : false;
+                const reason = Coupons.unusableReason(coupon, { subtotal, usedByCustomer });
+                if (reason) throw new OrderError(reason);
+                discount = Coupons.computeDiscount(coupon, subtotal);
+            }
+
+            // Phí ship tính theo tiền hàng trước giảm giá
+            const shipping_fee = computeShippingFee(subtotal);
+            const total_amount = subtotal - discount + shipping_fee;
+
             const order_code = `ORD-${Date.now()}`;
 
-            // Tạo đơn hàng
-            const orderResult = await client.query(
+            // Tạo đơn hàng (cột coupon_code chỉ ghi khi có dùng mã: database chưa nâng cấp vẫn đặt hàng thường được)
+            const [orderResult] = await client.query(
                 `INSERT INTO orders (
                     order_code, user_id, customer_name, customer_email, customer_phone,
                     customer_address, customer_ward, customer_district, customer_city,
                     note, subtotal, discount, shipping_fee, total_amount,
-                    payment_method, payment_status, status
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'pending', 'pending')
-                RETURNING id`,
+                    payment_method${coupon ? ', coupon_code' : ''}, payment_status, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${coupon ? ', ?' : ''}, 'pending', 'pending')`,
                 [
-                    order_code, user_id, customer_name, customer_email, customer_phone,
-                    customer_address, customer_ward, customer_district, customer_city,
-                    note, subtotal, discount, shipping_fee, total_amount, payment_method
+                    order_code,
+                    user_id,
+                    customer_name,
+                    customer_email,
+                    customer_phone,
+                    customer_address,
+                    customer_ward,
+                    customer_district,
+                    customer_city,
+                    note,
+                    subtotal,
+                    discount,
+                    shipping_fee,
+                    total_amount,
+                    payment_method,
+                    ...(coupon ? [coupon.code] : []),
                 ]
             );
 
-            const orderId = orderResult.rows[0].id;
+            const orderId = orderResult.insertId;
+
+            if (coupon) {
+                await client.query('UPDATE coupons SET used_count = used_count + 1 WHERE id = ?', [coupon.id]);
+            }
 
             // Thêm order items và cập nhật stock
             for (const item of cartItems) {
-                const total = parseFloat(item.price) * parseInt(item.quantity);
+                const total =
+                    parseFloat(item.price) * parseInt(item.quantity);
+
                 await client.query(
-                    `INSERT INTO order_items (order_id, product_id, product_name, product_image, quantity, price, total)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                    [orderId, item.product_id, item.name, item.image_url, item.quantity, item.price, total]
+                    `INSERT INTO order_items (
+                        order_id, product_id, product_name, product_image,
+                        quantity, price, total
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        orderId,
+                        item.product_id,
+                        item.name,
+                        item.image_url,
+                        item.quantity,
+                        item.price,
+                        total,
+                    ]
                 );
-                
-                const stockResult = await client.query(
-                    'UPDATE products SET stock = stock - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND stock >= $3 RETURNING id',
+
+                const [stockResult] = await client.query(
+                    `UPDATE products
+                     SET stock = stock - ?,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ? AND stock >= ?`,
                     [item.quantity, item.product_id, item.quantity]
                 );
-                
-                if (stockResult.rowCount === 0) {
-                    throw new Error(`Không thể cập nhật tồn kho cho ${item.name}`);
+
+                if (stockResult.affectedRows === 0) {
+                    throw new Error(
+                        `Không thể cập nhật tồn kho cho ${item.name}`
+                    );
                 }
             }
 
-            // Ghi lịch sử
+            // Ghi lịch sử trạng thái
             await client.query(
-                `INSERT INTO order_status_history (order_id, old_status, new_status, changed_by, note)
-                 VALUES ($1, NULL, 'pending', $2, 'Tạo đơn hàng')`,
+                `INSERT INTO order_status_history (
+                    order_id, old_status, new_status, changed_by, note
+                ) VALUES (?, NULL, 'pending', ?, 'Tạo đơn hàng')`,
                 [orderId, user_id]
             );
 
             // Xóa giỏ hàng
-            await client.query('DELETE FROM cart_items WHERE session_id = $1', [session_id]);
-            
-            await client.query('COMMIT');
+            await client.query(
+                'DELETE FROM cart_items WHERE session_id = ?',
+                [session_id]
+            );
+
+            // Commit transaction
+            await client.commit();
+
             return await this.getOrderById(orderId);
+
         } catch (error) {
-            await client.query('ROLLBACK');
+            // Rollback nếu có lỗi
+            await client.rollback();
             throw error;
+
         } finally {
             client.release();
         }
@@ -114,176 +214,476 @@ class OrderModel {
     static async getOrders(filters = {}) {
         let sql = 'SELECT * FROM orders WHERE 1=1';
         const values = [];
-        let paramCount = 1;
-        
+
         if (filters.status) {
-            sql += ` AND status = $${paramCount++}`;
+            sql += ' AND status = ?';
             values.push(filters.status);
         }
+
         if (filters.payment_status) {
-            sql += ` AND payment_status = $${paramCount++}`;
+            sql += ' AND payment_status = ?';
             values.push(filters.payment_status);
         }
+
         if (filters.user_id) {
-            sql += ` AND user_id = $${paramCount++}`;
+            sql += ' AND user_id = ?';
             values.push(filters.user_id);
         }
-        
+
         sql += ' ORDER BY created_at DESC';
-        const result = await db.query(sql, values);
-        return result.rows;
+
+        const rows = await db.query(sql, values);
+
+        return rows;
     }
 
     static async getOrderById(id) {
-        const result = await db.query('SELECT * FROM orders WHERE id = $1', [id]);
-        return result.rows[0];
+    const rows = await db.query(
+        'SELECT * FROM orders WHERE id = ?',
+        [id]
+    );
+
+    return rows[0];
+}
+
+static async getOrderByCode(orderCode) {
+    const rows = await db.query(
+        'SELECT * FROM orders WHERE order_code = ?',
+        [orderCode]
+    );
+
+    return rows[0];
+}
+
+static async getOrderItems(orderId) {
+    const rows = await db.query(
+        'SELECT * FROM order_items WHERE order_id = ? ORDER BY id',
+        [orderId]
+    );
+
+    return rows;
+}
+
+static async getOrderWithItems(orderId) {
+    const order = await this.getOrderById(orderId);
+
+    if (!order) return null;
+
+    const items = await this.getOrderItems(orderId);
+
+    return { ...order, items };
+}
+
+static async updateOrderStatus(id, newStatus, changedBy = null, note = null) {
+    if (!ORDER_STATUSES.includes(newStatus)) {
+        throw new OrderError('Trạng thái đơn hàng không hợp lệ');
     }
 
-    static async getOrderByCode(orderCode) {
-        const result = await db.query('SELECT * FROM orders WHERE order_code = $1', [orderCode]);
-        return result.rows[0];
-    }
+    const client = await db.getClient();
 
-    static async getOrderItems(orderId) {
-        const result = await db.query('SELECT * FROM order_items WHERE order_id = $1 ORDER BY id', [orderId]);
-        return result.rows;
-    }
+    try {
+        await client.beginTransaction();
 
-    static async getOrderWithItems(orderId) {
-        const order = await this.getOrderById(orderId);
-        if (!order) return null;
-        
-        const items = await this.getOrderItems(orderId);
-        return { ...order, items };
-    }
+        const [orders] = await client.query(
+            'SELECT * FROM orders WHERE id = ? FOR UPDATE',
+            [id]
+        );
 
-    static async updateOrderStatus(id, newStatus, changedBy = null, note = null) {
-        const client = await db.getClient();
-        try {
-            await client.query('BEGIN');
-            
-            const orderResult = await client.query('SELECT * FROM orders WHERE id = $1 FOR UPDATE', [id]);
-            const order = orderResult.rows[0];
-            if (!order) throw new Error('Không tìm thấy đơn hàng');
+        const order = orders[0];
 
-            await client.query(
-                'UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-                [newStatus, id]
-            );
-            
-            await client.query(
-                `INSERT INTO order_status_history (order_id, old_status, new_status, changed_by, note)
-                 VALUES ($1, $2, $3, $4, $5)`,
-                [id, order.status, newStatus, changedBy, note]
-            );
-            
-            await client.query('COMMIT');
-            return await this.getOrderById(id);
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
+        if (!order) {
+            throw new OrderError('Không tìm thấy đơn hàng', 404);
         }
-    }
 
-    static async updatePaymentStatus(id, paymentStatus, paymentId = null) {
-        const result = await db.query(
-            'UPDATE orders SET payment_status = $1, payment_id = COALESCE($2, payment_id), updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *',
-            [paymentStatus, paymentId, id]
-        );
-        return result.rows[0];
-    }
+        if (order.status === newStatus) {
+            throw new OrderError(`Đơn hàng đã ở trạng thái "${STATUS_LABELS[newStatus]}"`, 409);
+        }
 
-    static async cancelOrder(id, changedBy = null, reason = null) {
-        return await this.updateOrderStatus(id, 'cancelled', changedBy, reason || 'Đơn hàng bị hủy');
-    }
+        if (!canTransition(order.status, newStatus)) {
+            const next = (TRANSITIONS[order.status] || []).map((x) => `"${STATUS_LABELS[x]}"`).join(', ');
+            throw new OrderError(
+                `Không thể chuyển đơn từ "${STATUS_LABELS[order.status] || order.status}" sang "${STATUS_LABELS[newStatus]}". ` +
+                    (next ? `Chỉ có thể chuyển sang: ${next}.` : 'Đây là trạng thái cuối.'),
+                409
+            );
+        }
 
-    static async getDashboardStats() {
-        // Tổng số sản phẩm
-        const totalProductsResult = await db.query('SELECT COUNT(*) AS count FROM products');
-        const totalProducts = parseInt(totalProductsResult.rows[0].count);
-        
-        // Tổng số đơn hàng
-        const totalOrdersResult = await db.query('SELECT COUNT(*) AS count FROM orders');
-        const totalOrders = parseInt(totalOrdersResult.rows[0].count);
-        
-        // Tổng doanh thu
-        const totalRevenueResult = await db.query(
-            `SELECT COALESCE(SUM(total_amount), 0) AS total 
-             FROM orders 
-             WHERE status IN ('delivered', 'completed')`
-        );
-        const totalRevenue = parseFloat(totalRevenueResult.rows[0].total);
-        
-        // Sản phẩm tồn kho thấp
-        const lowStockResult = await db.query('SELECT COUNT(*) AS count FROM products WHERE stock <= 10');
-        const lowStockProducts = parseInt(lowStockResult.rows[0].count);
-        
-        // Đơn hàng chờ xử lý
-        const pendingResult = await db.query("SELECT COUNT(*) AS count FROM orders WHERE status = 'pending'");
-        const pendingOrders = parseInt(pendingResult.rows[0].count);
-        
-        // Doanh thu theo tháng (6 tháng gần nhất)
-        const monthlyRevenueResult = await db.query(
-            `SELECT 
-                TO_CHAR(created_at, 'YYYY-MM') AS month,
-                COALESCE(SUM(total_amount), 0) AS revenue
-             FROM orders
-             WHERE created_at >= CURRENT_DATE - INTERVAL '6 months'
-             GROUP BY TO_CHAR(created_at, 'YYYY-MM')
-             ORDER BY month`
-        );
-        
-        return {
-            totalProducts,
-            totalOrders,
-            totalRevenue,
-            lowStockProducts,
-            pendingOrders,
-            monthlyRevenue: monthlyRevenueResult.rows
-        };
-    }
+        // Hủy đơn => hoàn lại tồn kho (tồn kho đã bị trừ lúc đặt hàng)
+        if (newStatus === 'cancelled') {
+            const [items] = await client.query(
+                'SELECT product_id, quantity FROM order_items WHERE order_id = ?',
+                [id]
+            );
+            for (const item of items) {
+                if (item.product_id) {
+                    await client.query(
+                        'UPDATE products SET stock = stock + ? WHERE id = ?',
+                        [item.quantity, item.product_id]
+                    );
+                }
+            }
+            // ... và trả lại lượt dùng mã giảm giá
+            if (order.coupon_code) {
+                await client.query(
+                    'UPDATE coupons SET used_count = GREATEST(used_count - 1, 0) WHERE code = ?',
+                    [order.coupon_code]
+                );
+            }
+        }
 
-    // Thống kê nâng cao
-    static async getAdvancedStats(startDate, endDate) {
-        const result = await db.query(
-            `SELECT 
-                COUNT(*) as total_orders,
-                COUNT(DISTINCT user_id) as unique_customers,
-                SUM(total_amount) as total_revenue,
-                AVG(total_amount) as avg_order_value,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders,
-                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_orders,
-                SUM(CASE WHEN payment_status = 'paid' THEN total_amount ELSE 0 END) as paid_revenue,
-                MODE() WITHIN GROUP (ORDER BY payment_method) as most_used_payment
-             FROM orders
-             WHERE created_at BETWEEN $1 AND $2`,
-            [startDate, endDate]
-        );
-        return result.rows[0];
-    }
+        // Đơn COD giao thành công => đã thu tiền
+        const markPaid =
+            newStatus === 'delivered' &&
+            order.payment_method === 'cod' &&
+            order.payment_status !== 'paid';
 
-    // Lấy đơn hàng theo user
-    static async getOrdersByUser(userId, limit = 10, offset = 0) {
-        const result = await db.query(
-            `SELECT * FROM orders 
-             WHERE user_id = $1 
-             ORDER BY created_at DESC 
-             LIMIT $2 OFFSET $3`,
-            [userId, limit, offset]
+        await client.query(
+            `UPDATE orders SET status = ?, ${markPaid ? "payment_status = 'paid', " : ''}updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            [newStatus, id]
         );
-        return result.rows;
-    }
 
-    // Đếm số đơn hàng theo user
-    static async countOrdersByUser(userId) {
-        const result = await db.query(
-            'SELECT COUNT(*) as count FROM orders WHERE user_id = $1',
-            [userId]
+        await client.query(
+            `INSERT INTO order_status_history (
+                order_id, old_status, new_status, changed_by, note
+            ) VALUES (?, ?, ?, ?, ?)`,
+            [id, order.status, newStatus, changedBy, note]
         );
-        return parseInt(result.rows[0].count);
+
+        await client.commit();
+
+        return await this.getOrderById(id);
+
+    } catch (error) {
+        await client.rollback();
+        throw error;
+
+    } finally {
+        client.release();
     }
 }
+
+static async updatePaymentStatus(id, paymentStatus, paymentId = null) {
+    if (!PAYMENT_STATUSES.includes(paymentStatus)) {
+        throw new OrderError('Trạng thái thanh toán không hợp lệ');
+    }
+    const existing = await this.getOrderById(id);
+    if (!existing) throw new OrderError('Không tìm thấy đơn hàng', 404);
+    if (existing.status === 'cancelled') {
+        throw new OrderError('Không thể đổi trạng thái thanh toán của đơn đã hủy', 409);
+    }
+
+    await db.pool.query(
+        `UPDATE orders
+         SET payment_status = ?,
+             payment_id = COALESCE(?, payment_id),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [paymentStatus, paymentId, id]
+    );
+
+    return await this.getOrderById(id);
+}
+
+static async cancelOrder(id, changedBy = null, reason = null) {
+    return await this.updateOrderStatus(
+        id,
+        'cancelled',
+        changedBy,
+        reason || 'Đơn hàng bị hủy'
+    );
+}
+
+static async getDashboardStats() {
+    const realized = REVENUE_STATUSES.map((x) => `'${x}'`).join(', ');
+
+    const [
+        productsR, ordersR, revenueR, lowR, pendingR, todayR, monthlyRows, lowList, recent
+    ] = await Promise.all([
+        db.query('SELECT COUNT(*) AS count FROM products'),
+        db.query('SELECT COUNT(*) AS count FROM orders'),
+        db.query(`SELECT COALESCE(SUM(total_amount), 0) AS total FROM orders WHERE status IN (${realized})`),
+        db.query('SELECT COUNT(*) AS count FROM products WHERE stock <= 10'),
+        db.query("SELECT COUNT(*) AS count FROM orders WHERE status = 'pending'"),
+        db.query(
+            `SELECT COUNT(*) AS orders, COALESCE(SUM(total_amount), 0) AS sales
+             FROM orders WHERE created_at >= CURDATE() AND status <> 'cancelled'`
+        ),
+        // Doanh thu thực (delivered/completed) 6 tháng gần nhất, gồm tháng hiện tại
+        db.query(
+            `SELECT DATE_FORMAT(created_at, '%Y-%m') AS month,
+                    COALESCE(SUM(total_amount), 0) AS revenue
+             FROM orders
+             WHERE created_at >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 5 MONTH), '%Y-%m-01')
+               AND status IN (${realized})
+             GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+             ORDER BY month`
+        ),
+        db.query('SELECT id, name, stock FROM products WHERE stock <= 10 ORDER BY stock ASC, id ASC LIMIT 5'),
+        db.query(
+            `SELECT id, order_code, customer_name, total_amount, status, created_at
+             FROM orders ORDER BY created_at DESC, id DESC LIMIT 5`
+        )
+    ]);
+
+    // Điền 0 cho tháng không có doanh thu để biểu đồ đủ 6 tháng
+    const [cy, cm] = todayYmd().split('-').map(Number);
+    const byMonth = new Map(monthlyRows.map((r) => [r.month, Number(r.revenue)]));
+    const monthlyRevenue = [];
+    for (let i = 5; i >= 0; i -= 1) {
+        const d = new Date(Date.UTC(cy, cm - 1 - i, 1));
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+        monthlyRevenue.push({ month: key, revenue: byMonth.get(key) || 0 });
+    }
+
+    const topProducts = await getTopProducts(resolveRange({ period: '30d' }), 5);
+
+    return {
+        totalProducts: parseInt(productsR[0].count, 10),
+        totalOrders: parseInt(ordersR[0].count, 10),
+        totalRevenue: parseFloat(revenueR[0].total),
+        lowStockProducts: parseInt(lowR[0].count, 10),
+        pendingOrders: parseInt(pendingR[0].count, 10),
+        paymentClaims: await OrderModel.countPaymentClaims(),
+        todayOrders: parseInt(todayR[0].orders, 10),
+        todaySales: parseFloat(todayR[0].sales),
+        monthlyRevenue,
+        topProducts,
+        lowStockList: lowList.map((p) => ({ id: p.id, name: p.name, stock: Number(p.stock) })),
+        recentOrders: recent.map((o) => ({ ...o, total_amount: Number(o.total_amount) }))
+    };
+}
+
+// Thống kê nâng cao
+static async getAdvancedStats(startDate, endDate) {
+    const rows = await db.query(
+        `SELECT
+            COUNT(*) AS total_orders,
+            COUNT(DISTINCT user_id) AS unique_customers,
+            COALESCE(SUM(total_amount), 0) AS total_revenue,
+            COALESCE(AVG(total_amount), 0) AS avg_order_value,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_orders,
+            SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_orders,
+            SUM(CASE WHEN payment_status = 'paid' THEN total_amount ELSE 0 END) AS paid_revenue
+         FROM orders
+         WHERE created_at BETWEEN ? AND ?`,
+        [startDate, endDate]
+    );
+
+    return rows[0];
+}
+
+// Danh sách đơn có lọc + phân trang phía server (trang Đơn hàng của dashboard)
+static async getOrdersPaged(filters = {}) {
+    const { status, payment_status, search, from, to } = filters;
+
+    for (const [k, v] of Object.entries({ status, payment_status, search, from, to })) {
+        if (v !== undefined && v !== '' && !isStr(v)) throw new OrderError(`Tham số ${k} không hợp lệ`);
+    }
+    if (status && !ORDER_STATUSES.includes(status)) throw new OrderError('Trạng thái đơn hàng không hợp lệ');
+    if (payment_status && !PAYMENT_STATUSES.includes(payment_status)) throw new OrderError('Trạng thái thanh toán không hợp lệ');
+    if (from && !isYmd(from)) throw new OrderError('from phải có dạng YYYY-MM-DD');
+    if (to && !isYmd(to)) throw new OrderError('to phải có dạng YYYY-MM-DD');
+    if (from && to && from > to) throw new OrderError('Ngày bắt đầu phải trước ngày kết thúc');
+
+    const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 10, 1), 100);
+    const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+
+    // Điều kiện chung (không gồm trạng thái) để đếm số đơn theo từng trạng thái
+    const conds = [];
+    const params = [];
+    if (payment_status) { conds.push('payment_status = ?'); params.push(payment_status); }
+    // Chỉ các đơn khách báo đã chuyển khoản mà cửa hàng chưa xác nhận (bấm từ chuông thông báo)
+    if (filters.claimed === '1') conds.push("payment_claimed_at IS NOT NULL AND payment_status <> 'paid' AND status <> 'cancelled'");
+    if (from) { conds.push('created_at >= ?'); params.push(`${from} 00:00:00`); }
+    if (to) { conds.push('created_at < ?'); params.push(`${addDays(to, 1)} 00:00:00`); }
+    if (search && search.trim()) {
+        const like = `%${search.trim().replace(/[\\%_]/g, '\\$&')}%`;
+        conds.push('(order_code LIKE ? OR customer_name LIKE ? OR customer_phone LIKE ? OR customer_email LIKE ?)');
+        params.push(like, like, like, like);
+    }
+    const commonWhere = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+
+    const countRows = await db.query(
+        `SELECT status, COUNT(*) AS n FROM orders ${commonWhere} GROUP BY status`,
+        params
+    );
+    const counts = { all: 0 };
+    ORDER_STATUSES.forEach((x) => { counts[x] = 0; });
+    countRows.forEach((r) => {
+        counts[r.status] = Number(r.n);
+        counts.all += Number(r.n);
+    });
+
+    const dataConds = status ? [...conds, 'status = ?'] : conds;
+    const dataParams = status ? [...params, status] : params;
+    const dataWhere = dataConds.length ? `WHERE ${dataConds.join(' AND ')}` : '';
+    const total = status ? counts[status] || 0 : counts.all;
+
+    const orders = await db.query(
+        `SELECT * FROM orders ${dataWhere} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+        [...dataParams, limit, (page - 1) * limit]
+    );
+
+    return { orders, total, page, limit, pages: Math.max(Math.ceil(total / limit), 1), counts };
+}
+
+// Lịch sử đổi trạng thái (không làm hỏng trang chi tiết nếu bảng/cột khác dự kiến)
+static async getOrderHistory(orderId) {
+    try {
+        return await db.query(
+            `SELECT h.id, h.old_status, h.new_status, h.note, h.created_at, h.changed_by,
+                    u.full_name AS changed_by_name
+             FROM order_status_history h
+             LEFT JOIN users u ON u.id = h.changed_by
+             WHERE h.order_id = ?
+             ORDER BY h.id ASC`,
+            [orderId]
+        );
+    } catch (error) {
+        console.warn('Không đọc được order_status_history:', error.message);
+        return [];
+    }
+}
+
+// Chi tiết đơn: thông tin + sản phẩm + lịch sử trạng thái
+static async getOrderDetail(id) {
+    const order = await this.getOrderById(id);
+    if (!order) return null;
+    const [items, history] = await Promise.all([this.getOrderItems(id), this.getOrderHistory(id)]);
+    return { ...order, items, history };
+}
+
+// Lấy đơn hàng theo user
+static async getOrdersByUser(userId, limit = 10, offset = 0) {
+    const rows = await db.query(
+        `SELECT *
+         FROM orders
+         WHERE user_id = ?
+         ORDER BY created_at DESC
+         LIMIT ? OFFSET ?`,
+        [userId, Number(limit), Number(offset)]
+    );
+
+    return rows;
+}
+
+// Đếm số đơn hàng theo user
+static async countOrdersByUser(userId) {
+    const rows = await db.query(
+        'SELECT COUNT(*) AS count FROM orders WHERE user_id = ?',
+        [userId]
+    );
+
+    return parseInt(rows[0].count);
+}
+}
+
+// ───────────── Đơn hàng của khách (trang "Đơn hàng của tôi") ─────────────
+// Đơn của khách = đơn gắn tài khoản, hoặc đơn đặt lúc chưa đăng nhập có cùng email với tài khoản
+// (email tài khoản đã được xác nhận bằng mã OTP lúc đăng ký nên chắc chắn là của khách).
+const OWNER_SQL = '(user_id = ? OR (user_id IS NULL AND LOWER(customer_email) = LOWER(?)))';
+const CUSTOMER_GROUPS = {
+    pending: ['pending'],
+    processing: ['processing'],
+    shipped: ['shipped'],
+    done: ['delivered', 'completed'],
+    cancelled: ['cancelled']
+};
+// Ghi chú nội bộ của cửa hàng / mã giao dịch không gửi cho khách
+const publicOrder = (o) => {
+    if (!o) return o;
+    const { admin_note, payment_id, user_id, ...rest } = o; // eslint-disable-line no-unused-vars
+    return rest;
+};
+
+OrderModel.CUSTOMER_GROUPS = CUSTOMER_GROUPS;
+OrderModel.publicOrder = publicOrder;
+
+OrderModel.getCustomerOrders = async function getCustomerOrders(userId, email, { group, page = 1, limit = 10 } = {}) {
+    if (group && !CUSTOMER_GROUPS[group]) throw new OrderError('Nhóm đơn hàng không hợp lệ');
+    const owner = [userId, email || ''];
+    const countRows = await db.query(`SELECT status, COUNT(*) AS n FROM orders WHERE ${OWNER_SQL} GROUP BY status`, owner);
+    const counts = { all: 0 };
+    Object.keys(CUSTOMER_GROUPS).forEach((g) => { counts[g] = 0; });
+    for (const r of countRows) {
+        const n = Number(r.n);
+        counts.all += n;
+        const g = Object.keys(CUSTOMER_GROUPS).find((k) => CUSTOMER_GROUPS[k].includes(r.status));
+        if (g) counts[g] += n;
+    }
+    const total = group ? counts[group] : counts.all;
+    const statuses = group ? CUSTOMER_GROUPS[group] : null;
+    const orders = await db.query(
+        `SELECT * FROM orders WHERE ${OWNER_SQL}${statuses ? ` AND status IN (${statuses.map(() => '?').join(', ')})` : ''}
+         ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+        [...owner, ...(statuses || []), limit, (page - 1) * limit]
+    );
+    let items = [];
+    if (orders.length) {
+        items = await db.query(
+            `SELECT order_id, product_id, product_name, product_image, quantity, price, total
+             FROM order_items WHERE order_id IN (${orders.map(() => '?').join(', ')}) ORDER BY id`,
+            orders.map((o) => o.id)
+        );
+    }
+    return {
+        orders: orders.map((o) => ({ ...publicOrder(o), items: items.filter((i) => i.order_id === o.id) })),
+        counts,
+        total,
+        page,
+        limit,
+        pages: Math.max(Math.ceil(total / limit), 1)
+    };
+};
+
+/** Chi tiết 1 đơn của khách (null nếu không phải đơn của khách — không cho biết đơn có tồn tại hay không). */
+OrderModel.getCustomerOrder = async function getCustomerOrder(userId, email, orderCode) {
+    const rows = await db.query(`SELECT * FROM orders WHERE order_code = ? AND ${OWNER_SQL}`, [orderCode, userId, email || '']);
+    const order = rows[0];
+    if (!order) return null;
+    const [items, history] = await Promise.all([
+        this.getOrderItems(order.id),
+        db.query('SELECT old_status, new_status, note, created_at FROM order_status_history WHERE order_id = ? ORDER BY id ASC', [order.id])
+            .catch(() => [])
+    ]);
+    return {
+        ...publicOrder(order),
+        items: items.map(({ id, product_id, product_name, product_image, quantity, price, total }) => ({ id, product_id, product_name, product_image, quantity, price, total })),
+        // Ghi chú khi đổi trạng thái có thể là ghi chú nội bộ: chỉ cho khách xem lý do hủy
+        history: history.map((h) => ({ status: h.new_status, at: h.created_at, note: h.new_status === 'cancelled' ? h.note || null : null }))
+    };
+};
+
+// ───────────── Khách báo đã chuyển khoản ─────────────
+/**
+ * Ghi nhận khách báo đã chuyển khoản. Báo lại trong `quietMinutes` phút thì giữ nguyên thời điểm cũ và fresh = false
+ * (không báo nhân viên thêm lần nữa). So sánh thời gian ngay trong MySQL nên không lệch khi múi giờ MySQL khác Node.
+ * @returns {Promise<{ order: object, fresh: boolean }>}
+ */
+OrderModel.markPaymentClaimed = async function markPaymentClaimed(id, quietMinutes = 10) {
+    const result = await db.query(
+        'UPDATE orders SET payment_claimed_at = CURRENT_TIMESTAMP WHERE id = ? AND (payment_claimed_at IS NULL OR payment_claimed_at < CURRENT_TIMESTAMP - INTERVAL ? MINUTE)',
+        [id, quietMinutes]
+    );
+    return { order: await this.getOrderById(id), fresh: !!(result && result.affectedRows > 0) };
+};
+/** Nhân viên chưa thấy tiền về: bỏ trạng thái "khách báo đã chuyển" để khách kiểm tra / báo lại. */
+OrderModel.clearPaymentClaim = async function clearPaymentClaim(id) {
+    await db.query('UPDATE orders SET payment_claimed_at = NULL WHERE id = ?', [id]);
+    return this.getOrderById(id);
+};
+/** Số đơn khách báo đã chuyển khoản nhưng cửa hàng chưa xác nhận (chuông thông báo). Database chưa nâng cấp → 0. */
+OrderModel.countPaymentClaims = async function countPaymentClaims() {
+    try {
+        const rows = await db.query(
+            "SELECT COUNT(*) AS count FROM orders WHERE payment_claimed_at IS NOT NULL AND payment_status <> 'paid' AND status <> 'cancelled'"
+        );
+        return parseInt(rows[0].count, 10) || 0;
+    } catch {
+        return 0;
+    }
+};
+
+OrderModel.OrderError = OrderError;
 
 module.exports = OrderModel;
