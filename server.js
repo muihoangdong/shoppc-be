@@ -8,6 +8,7 @@ const { hub } = require('./src/realtime/hub');
 const supportService = require('./src/services/support/supportService');
 const { describe: aiDescribe } = require('./src/services/ai/anthropic');
 const mailer = require('./src/services/mailer');
+const { getBankAccount } = require('./src/services/bankSettings');
 
 dotenv.config();
 
@@ -80,8 +81,13 @@ const startServer = async () => {
         console.log(`🤖 AI: ${aiDescribe()}`);
         console.log(mailer.isConfigured()
             ? `📧 Email: gửi qua ${process.env.SMTP_HOST} (${process.env.SMTP_USER})`
-            : '📧 Email: CHƯA cấu hình SMTP → mã OTP hiện ngay trên trang đăng ký (chế độ chạy thử). Gửi email thật: điền SMTP trong .env, kiểm tra bằng "npm run mail-check"');
-        console.log(`\n✨ Ready to accept requests!\n`);
+            : '📧 Email: CHƯA cấu hình SMTP → mã OTP hiện ngay trên trang đăng ký. Gửi email thật: điền SMTP trong .env, kiểm tra bằng "npm run mail-check"');
+        getBankAccount()
+            .then((bank) => console.log(bank
+                ? `💳 Chuyển khoản VietQR: ${bank.bank_name} ${bank.account_no} — ${bank.account_name} (${bank.source === 'settings' ? 'nhập trong admin' : 'từ .env'})`
+                : '💳 Chuyển khoản VietQR: CHƯA có tài khoản nhận tiền → vào admin → Cài đặt → "Thanh toán chuyển khoản" để nhập'))
+            .catch(() => {})
+            .finally(() => console.log(`\n✨ Ready to accept requests!\n`));
     });
     // Kết nối SSE mở lâu: không để Node tự cắt sau 5 phút mặc định
     server.requestTimeout = 0;

@@ -443,6 +443,7 @@ static async getDashboardStats() {
         totalRevenue: parseFloat(revenueR[0].total),
         lowStockProducts: parseInt(lowR[0].count, 10),
         pendingOrders: parseInt(pendingR[0].count, 10),
+        paymentClaims: await OrderModel.countPaymentClaims(),
         todayOrders: parseInt(todayR[0].orders, 10),
         todaySales: parseFloat(todayR[0].sales),
         monthlyRevenue,
@@ -491,6 +492,8 @@ static async getOrdersPaged(filters = {}) {
     const conds = [];
     const params = [];
     if (payment_status) { conds.push('payment_status = ?'); params.push(payment_status); }
+    // Chỉ các đơn khách báo đã chuyển khoản mà cửa hàng chưa xác nhận (bấm từ chuông thông báo)
+    if (filters.claimed === '1') conds.push("payment_claimed_at IS NOT NULL AND payment_status <> 'paid' AND status <> 'cancelled'");
     if (from) { conds.push('created_at >= ?'); params.push(`${from} 00:00:00`); }
     if (to) { conds.push('created_at < ?'); params.push(`${addDays(to, 1)} 00:00:00`); }
     if (search && search.trim()) {
@@ -649,6 +652,36 @@ OrderModel.getCustomerOrder = async function getCustomerOrder(userId, email, ord
         // Ghi chú khi đổi trạng thái có thể là ghi chú nội bộ: chỉ cho khách xem lý do hủy
         history: history.map((h) => ({ status: h.new_status, at: h.created_at, note: h.new_status === 'cancelled' ? h.note || null : null }))
     };
+};
+
+// ───────────── Khách báo đã chuyển khoản ─────────────
+/**
+ * Ghi nhận khách báo đã chuyển khoản. Báo lại trong `quietMinutes` phút thì giữ nguyên thời điểm cũ và fresh = false
+ * (không báo nhân viên thêm lần nữa). So sánh thời gian ngay trong MySQL nên không lệch khi múi giờ MySQL khác Node.
+ * @returns {Promise<{ order: object, fresh: boolean }>}
+ */
+OrderModel.markPaymentClaimed = async function markPaymentClaimed(id, quietMinutes = 10) {
+    const result = await db.query(
+        'UPDATE orders SET payment_claimed_at = CURRENT_TIMESTAMP WHERE id = ? AND (payment_claimed_at IS NULL OR payment_claimed_at < CURRENT_TIMESTAMP - INTERVAL ? MINUTE)',
+        [id, quietMinutes]
+    );
+    return { order: await this.getOrderById(id), fresh: !!(result && result.affectedRows > 0) };
+};
+/** Nhân viên chưa thấy tiền về: bỏ trạng thái "khách báo đã chuyển" để khách kiểm tra / báo lại. */
+OrderModel.clearPaymentClaim = async function clearPaymentClaim(id) {
+    await db.query('UPDATE orders SET payment_claimed_at = NULL WHERE id = ?', [id]);
+    return this.getOrderById(id);
+};
+/** Số đơn khách báo đã chuyển khoản nhưng cửa hàng chưa xác nhận (chuông thông báo). Database chưa nâng cấp → 0. */
+OrderModel.countPaymentClaims = async function countPaymentClaims() {
+    try {
+        const rows = await db.query(
+            "SELECT COUNT(*) AS count FROM orders WHERE payment_claimed_at IS NOT NULL AND payment_status <> 'paid' AND status <> 'cancelled'"
+        );
+        return parseInt(rows[0].count, 10) || 0;
+    } catch {
+        return 0;
+    }
 };
 
 OrderModel.OrderError = OrderError;

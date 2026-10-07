@@ -1,7 +1,7 @@
 -- =====================================================================
 -- NÂNG CẤP DATABASE — CHẠY TỪNG LỆNH (DBeaver: đặt con trỏ vào lệnh rồi bấm Ctrl+Enter)
 --
--- Chọn đúng database (VD shopdb) trước. Chạy lần lượt BƯỚC 0 → BƯỚC 10, mỗi lần một lệnh.
+-- Chọn đúng database (VD shopdb) trước. Chạy lần lượt BƯỚC 0 → BƯỚC 12, mỗi lần một lệnh.
 -- Mỗi lệnh đứng riêng, không phụ thuộc lệnh khác.
 --
 -- Nếu một lệnh "ADD COLUMN" / "ADD KEY" báo:
@@ -22,7 +22,9 @@ UNION ALL SELECT 'B5 chỉ mục idx_products_part_type', IF(COUNT(*) > 0, 'có'
 UNION ALL SELECT 'B6 bảng coupons', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'coupons'
 UNION ALL SELECT 'B7 cột orders.coupon_code', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'orders' AND column_name = 'coupon_code'
 UNION ALL SELECT 'B8 chỉ mục idx_orders_coupon', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'orders' AND index_name = 'idx_orders_coupon'
-UNION ALL SELECT 'B9 bảng product_reviews', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'product_reviews';
+UNION ALL SELECT 'B9 bảng product_reviews', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'product_reviews'
+UNION ALL SELECT 'B10 bảng shop_settings', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'shop_settings'
+UNION ALL SELECT 'B11 cột orders.payment_claimed_at', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'orders' AND column_name = 'payment_claimed_at';
 
 
 -- BƯỚC 1. Bảng mã OTP xác nhận email (đăng ký, đổi email)
@@ -114,4 +116,17 @@ CREATE TABLE IF NOT EXISTS `product_reviews` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 
--- BƯỚC 10. Kiểm tra lại: chạy lại lệnh ở BƯỚC 0 — mọi dòng phải là "có". Xong thì khởi động lại backend.
+-- BƯỚC 10. Bảng cài đặt cửa hàng (tài khoản ngân hàng nhận tiền nhập trong admin → Cài đặt)
+CREATE TABLE IF NOT EXISTS `shop_settings` (
+  `setting_key` varchar(64) NOT NULL,
+  `setting_value` text,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+-- BƯỚC 11. Cột ghi lúc khách bấm "Tôi đã chuyển khoản"   (lỗi 1060 = đã có, bỏ qua)
+ALTER TABLE `orders` ADD COLUMN `payment_claimed_at` timestamp NULL DEFAULT NULL AFTER `payment_id`;
+
+
+-- BƯỚC 12. Kiểm tra lại: chạy lại lệnh ở BƯỚC 0 — mọi dòng phải là "có". Xong thì khởi động lại backend.

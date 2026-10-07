@@ -57,7 +57,7 @@ function run(s, p = []) {
             id: W.nextId++, order_code: p[0], user_id: p[1], customer_name: p[2], customer_email: p[3], customer_phone: p[4],
             customer_address: p[5], customer_ward: p[6], customer_district: p[7], customer_city: p[8], note: p[9],
             subtotal: p[10], discount: p[11], shipping_fee: p[12], total_amount: p[13], payment_method: p[14],
-            payment_status: 'pending', status: 'pending', created_at: new Date(),
+            payment_status: 'pending', status: 'pending', created_at: new Date(), payment_claimed_at: null,
             ...(/coupon_code/.test(s) ? { coupon_code: p[15] } : {}),
         };
         W.orders.push(o);

@@ -11,7 +11,8 @@
 
 const Order = require('../models/Order');
 const Events = require('../realtime/events');
-const { bankAccount } = require('../config/bank');
+const { getBankAccount } = require('./bankSettings');
+const Mailer = require('./mailer');
 const { buildPayload, toDataUrl } = require('./vietqr');
 
 /** Nội dung chuyển khoản = mã đơn bỏ dấu gạch (ngân hàng hay tự bỏ ký tự đặc biệt): ORD-1791176872988 -> ORD1791176872988 */
@@ -24,7 +25,7 @@ function findOrderCode(text) {
 }
 
 async function paymentInfo(order) {
-    const bank = bankAccount();
+    const bank = await getBankAccount();
     const amount = Math.round(Number(order.total_amount) || 0);
     const content = transferContent(order.order_code);
     const showQr = order.payment_method === 'banking' && order.payment_status !== 'paid' && order.status !== 'cancelled' && !!bank;
@@ -41,8 +42,37 @@ async function paymentInfo(order) {
         qr_data_url: showQr
             ? await toDataUrl(buildPayload({ bin: bank.bin, accountNo: bank.account_no, amount, addInfo: content }))
             : null,
-        auto_confirm: !!process.env.SEPAY_WEBHOOK_KEY
+        auto_confirm: !!process.env.SEPAY_WEBHOOK_KEY,
+        // Thời điểm khách bấm "Tôi đã chuyển khoản" (null nếu chưa báo / cửa hàng chưa thấy tiền)
+        payment_claimed_at: order.payment_claimed_at || null
     };
+}
+
+const CLAIM_QUIET_MINUTES = 10; // báo lại trong 10 phút thì không làm phiền nhân viên thêm lần nữa
+
+/**
+ * Khách báo "Tôi đã chuyển khoản": ghi nhận + báo nhân viên (realtime trên dashboard và email về hộp thư cửa hàng).
+ * Đơn không phải chuyển khoản / đã thanh toán / đã hủy thì từ chối.
+ */
+async function claimPayment(order) {
+    const fail = (message, status = 409) => Object.assign(new Error(message), { status, expose: true });
+    if (order.payment_method !== 'banking') throw fail('Đơn này không thanh toán bằng chuyển khoản.');
+    if (order.status === 'cancelled') throw fail('Đơn hàng đã bị hủy.');
+    if (order.payment_status === 'paid') throw fail('Cửa hàng đã nhận được thanh toán cho đơn này rồi.');
+
+    const { order: updated, fresh: notify } = await Order.markPaymentClaimed(order.id, CLAIM_QUIET_MINUTES);
+    if (notify) {
+        Events.paymentClaimed(updated);
+        Mailer.sendPaymentClaimToShop(updated).catch(() => {}); // không chờ email: trả lời khách ngay
+        console.log(`[payments] Khách báo đã chuyển khoản đơn ${updated.order_code} (${Math.round(Number(updated.total_amount))}₫).`);
+    }
+    return { order: updated, notified: notify };
+}
+
+/** Sau khi đơn chuyển sang "đã thanh toán": báo nhân viên + email cảm ơn khách. */
+function afterPaid(order, by) {
+    Events.paymentReceived(order, by);
+    Mailer.sendPaymentReceivedToCustomer(order).catch(() => {});
 }
 
 /**
@@ -52,7 +82,7 @@ async function handleSepayWebhook(body, by = { id: null, name: 'SePay (tự đ�
     const b = body && typeof body === 'object' ? body : {};
     if (b.transferType !== 'in') return { matched: false, reason: 'not_incoming' };
 
-    const bank = bankAccount();
+    const bank = await getBankAccount();
     if (bank && b.accountNumber && String(b.accountNumber).replace(/\s+/g, '') !== bank.account_no) {
         return { matched: false, reason: 'other_account' };
     }
@@ -76,8 +106,9 @@ async function handleSepayWebhook(body, by = { id: null, name: 'SePay (tự đ�
 
     const updated = await Order.updatePaymentStatus(order.id, 'paid', txId);
     Events.orderUpdated(updated, by);
+    afterPaid(updated, by);
     console.log(`[payments] Đơn ${code} đã thanh toán ${amount}₫ (giao dịch SePay #${b.id}).`);
     return { matched: true, reason: 'paid', order_code: code };
 }
 
-module.exports = { paymentInfo, handleSepayWebhook, transferContent, findOrderCode };
+module.exports = { paymentInfo, handleSepayWebhook, transferContent, findOrderCode, claimPayment, afterPaid };

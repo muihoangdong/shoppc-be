@@ -4,6 +4,8 @@
 --   2) Trang Build PC (tự chọn cấu hình, kiểm tra tương thích) -> cột products.part_type, products.build_specs
 --   3) Mã giảm giá                                             -> bảng coupons, cột orders.coupon_code
 --   4) Đánh giá sản phẩm (chỉ khách đã nhận hàng)              -> bảng product_reviews
+--   5) Thanh toán chuyển khoản: tài khoản ngân hàng nhập trong admin + khách báo "Tôi đã chuyển khoản"
+--                                                              -> bảng shop_settings, cột orders.payment_claimed_at
 --
 -- Cách dùng: mở file này, chọn database (VD shopdb) rồi chạy CẢ FILE dưới dạng script:
 --   DBeaver:          Alt+X  (nút "Execute SQL Script"), KHÔNG dùng Ctrl+Enter (chỉ chạy 1 lệnh)
@@ -128,10 +130,29 @@ CREATE TABLE IF NOT EXISTS `product_reviews` (
   CONSTRAINT `fk_reviews_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- ───────────── 5. Thanh toán chuyển khoản ─────────────
+CREATE TABLE IF NOT EXISTS `shop_settings` (
+  `setting_key` varchar(64) NOT NULL,
+  `setting_value` text,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+SET @has = (SELECT COUNT(*) FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND table_name = 'orders' AND column_name = 'payment_claimed_at');
+SET @sql = IF(@has = 0,
+  'ALTER TABLE `orders` ADD COLUMN `payment_claimed_at` timestamp NULL DEFAULT NULL AFTER `payment_id`',
+  'SELECT ''orders.payment_claimed_at: đã có, bỏ qua'' AS ket_qua');
+PREPARE st FROM @sql;
+EXECUTE st;
+DEALLOCATE PREPARE st;
+
 -- ───────────── Kiểm tra: mọi dòng phải là "có" ─────────────
 SELECT 'bảng email_otps' AS hang_muc, IF(COUNT(*) > 0, 'có', 'THIẾU') AS trang_thai FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'email_otps'
 UNION ALL SELECT 'bảng coupons', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'coupons'
 UNION ALL SELECT 'bảng product_reviews', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'product_reviews'
 UNION ALL SELECT 'cột products.part_type', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'products' AND column_name = 'part_type'
 UNION ALL SELECT 'cột products.build_specs', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'products' AND column_name = 'build_specs'
-UNION ALL SELECT 'cột orders.coupon_code', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'orders' AND column_name = 'coupon_code';
+UNION ALL SELECT 'cột orders.coupon_code', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'orders' AND column_name = 'coupon_code'
+UNION ALL SELECT 'bảng shop_settings', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'shop_settings'
+UNION ALL SELECT 'cột orders.payment_claimed_at', IF(COUNT(*) > 0, 'có', 'THIẾU') FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'orders' AND column_name = 'payment_claimed_at';

@@ -264,6 +264,11 @@ function classify(plan) {
             message = op.kind === 'create-table'
                 ? 'Thiếu bảng coupons: mã giảm giá (trang quản lý và ô nhập mã khi thanh toán) sẽ báo lỗi.'
                 : `Thiếu ${op.column ? `cột ${op.table}.${op.column}` : describeOp(op)}: đặt hàng có dùng mã giảm giá sẽ báo lỗi.`;
+        } else if (op.table === 'shop_settings' || (op.table === 'orders' && op.kind === 'add-column' && op.column === 'payment_claimed_at')) {
+            level = 'warning';
+            message = op.table === 'shop_settings'
+                ? 'Thiếu bảng shop_settings: trang Cài đặt → Thanh toán (nhập tài khoản ngân hàng) sẽ báo lỗi; mã QR vẫn dùng tài khoản trong .env.'
+                : 'Thiếu cột orders.payment_claimed_at: nút "Tôi đã chuyển khoản" của khách sẽ báo lỗi.';
         } else if (op.table === 'product_reviews') {
             level = 'warning';
             message = op.kind === 'create-table'

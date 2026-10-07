@@ -15,12 +15,37 @@ const OrderStub = {
         updates.push([id, status, paymentId]);
         return { ...o };
     },
+    getOrderById: async (id) => { const o = orders.find((x) => x.id === id); return o ? { ...o } : null; },
+    markPaymentClaimed: async (id, quiet) => {
+        const o = orders.find((x) => x.id === id);
+        const fresh = !o.payment_claimed_at || Date.now() - new Date(o.payment_claimed_at).getTime() > quiet * 60000;
+        if (fresh) o.payment_claimed_at = new Date();
+        return { order: { ...o }, fresh };
+    },
+    clearPaymentClaim: async (id) => { const o = orders.find((x) => x.id === id); o.payment_claimed_at = null; return { ...o }; },
+    publicOrder: (o) => o,
 };
 const events = [];
+const notices = []; // sự kiện mới: payment:claimed / payment:received
+const mails = [];
+const settings = {}; // bảng shop_settings giả
 H.install(new Map([
     [src('config/database.js'), { query: async () => [], pool: {} }],
     [src('models/Order.js'), OrderStub],
-    [src('realtime/events.js'), { orderUpdated: (o, by) => events.push([o.order_code, o.payment_status, by && by.name]), orderNew() {}, productChanged() {} }],
+    [src('models/User.js'), {}],
+    [src('models/ShopSetting.js'), {
+        getMany: async (keys) => Object.fromEntries(keys.filter((k) => k in settings).map((k) => [k, settings[k]])),
+        setMany: async (vals) => { for (const [k, v] of Object.entries(vals)) { if (v === null || v === undefined || v === '') delete settings[k]; else settings[k] = String(v); } },
+    }],
+    [src('services/mailer.js'), {
+        sendPaymentClaimToShop: async (o) => { mails.push(['shop', o.order_code]); return { delivered: true }; },
+        sendPaymentReceivedToCustomer: async (o) => { mails.push(['customer', o.order_code, o.customer_email]); return { delivered: true }; },
+    }],
+    [src('realtime/events.js'), {
+        orderUpdated: (o, by) => events.push([o.order_code, o.payment_status, by && by.name]), orderNew() {}, productChanged() {},
+        paymentClaimed: (o) => notices.push(['claimed', o.order_code]),
+        paymentReceived: (o, by) => notices.push(['received', o.order_code, by && by.name]),
+    }],
 ]));
 
 const Q = require(src('services/vietqr.js'));
@@ -28,6 +53,10 @@ const Bank = require(src('config/bank.js'));
 const Pay = require(src('services/payments.js'));
 const PayCtl = require(src('controllers/paymentController.js'));
 const OrderCtl = require(src('controllers/orderController.js'));
+const BankSettings = require(src('services/bankSettings.js'));
+const orderRoutes = require(src('routes/orderRoutes.js'));
+const paymentRoutes = require(src('routes/paymentRoutes.js'));
+const Auth = require(src('middlewares/auth.js'));
 const { test, done } = H.runner();
 
 const setBank = (env) => {
@@ -35,7 +64,9 @@ const setBank = (env) => {
     Object.assign(process.env, env);
 };
 const reset = () => {
-    orders.length = 0; updates.length = 0; events.length = 0;
+    orders.length = 0; updates.length = 0; events.length = 0; notices.length = 0; mails.length = 0;
+    for (const k of Object.keys(settings)) delete settings[k];
+    BankSettings._clearCache();
     orders.push(
         { id: 1, order_code: 'ORD-1791176872988', customer_phone: '0354 334 944', total_amount: '36030000.00', payment_method: 'banking', payment_status: 'pending', payment_id: null, status: 'pending' },
         { id: 2, order_code: 'ORD-1791176872999', customer_phone: '0900000000', total_amount: '500000.00', payment_method: 'cod', payment_status: 'pending', payment_id: null, status: 'pending' },
@@ -107,6 +138,8 @@ const parse = (s) => {
         let r = await Pay.handleSepayWebhook(tx());
         assert.deepStrictEqual(r, { matched: true, reason: 'paid', order_code: 'ORD-1791176872988' });
         assert.deepStrictEqual(updates, [[1, 'paid', 'sepay:92704']]); assert.deepStrictEqual(events, [['ORD-1791176872988', 'paid', 'SePay (tự động)']]);
+        assert.deepStrictEqual(notices, [['received', 'ORD-1791176872988', 'SePay (tự động)']], 'báo nhân viên đã nhận tiền');
+        assert.deepStrictEqual(mails.map((m) => m[0]), ['customer'], 'email cảm ơn khách');
         r = await Pay.handleSepayWebhook(tx()); assert.strictEqual(r.reason, 'already_paid'); assert.strictEqual(updates.length, 1);
     });
     await test('không xác nhận khi: tiền ra, thiếu tiền, sai tài khoản, không có mã đơn, đơn COD, đơn đã hủy, mã đơn không tồn tại', async () => {
@@ -138,6 +171,75 @@ const parse = (s) => {
         res = await H.capture(() => H.call(PayCtl.sepayWebhook, { body: { ...tx(), transferAmount: '36030000', id: '777' }, headers: { authorization: 'apikey  khoa-bi-mat-123' } }));
         assert.strictEqual(res.result.code, 200); assert.strictEqual(res.result.body.reason, 'paid', 'dữ liệu dạng form (chuỗi) vẫn đọc được');
         delete process.env.SEPAY_WEBHOOK_KEY;
+    });
+
+    console.log('Khách báo "Tôi đã chuyển khoản"');
+    const claim = (code, phone) => H.call(OrderCtl.claimPayment, { params: { orderCode: code }, query: { phone } });
+    await test('đơn chuyển khoản chưa trả: ghi nhận + báo nhân viên (realtime) + email cửa hàng; trang thanh toán trả về thời điểm báo', async () => {
+        reset(); setBank({ BANK_CODE: 'VCB', BANK_ACCOUNT_NO: '1012345678', BANK_ACCOUNT_NAME: 'SHOPPC' });
+        const r = await claim('ORD-1791176872988', '0354.334.944');
+        assert.strictEqual(r.code, 200, JSON.stringify(r.body)); assert.match(r.body.message, /Đã báo cửa hàng/);
+        assert(r.body.data.payment_claimed_at, 'có thời điểm báo');
+        assert.deepStrictEqual(notices, [['claimed', 'ORD-1791176872988']]); assert.deepStrictEqual(mails, [['shop', 'ORD-1791176872988']]);
+        assert.strictEqual(orders[0].payment_status, 'pending', 'chưa tự đánh dấu đã thanh toán: phải chờ cửa hàng xác nhận');
+    });
+    await test('bấm lại trong 10 phút: không làm phiền nhân viên thêm; sai SĐT → 404; COD / đã hủy / đã trả → 409', async () => {
+        reset();
+        await claim('ORD-1791176872988', '0354334944'); await claim('ORD-1791176872988', '0354334944');
+        assert.strictEqual(notices.length, 1); assert.strictEqual(mails.length, 1);
+        orders[0].payment_claimed_at = new Date(Date.now() - 11 * 60000); // báo lại sau hơn 10 phút: báo nhân viên lần nữa
+        await claim('ORD-1791176872988', '0354334944');
+        assert.strictEqual(notices.length, 2); assert.strictEqual(mails.length, 2);
+        notices.length = 1; mails.length = 1;
+        assert.strictEqual((await claim('ORD-1791176872988', '0900000000')).code, 404);
+        let r = await claim('ORD-1791176872999', '0900000000'); assert.strictEqual(r.code, 409); assert.match(r.body.message, /không thanh toán bằng chuyển khoản/);
+        r = await claim('ORD-1791176873000', '0900000001'); assert.strictEqual(r.code, 409); assert.match(r.body.message, /đã bị hủy/);
+        orders[0].payment_status = 'paid'; r = await claim('ORD-1791176872988', '0354334944'); assert.strictEqual(r.code, 409);
+        assert.strictEqual(notices.length, 1);
+    });
+    await test('nhân viên: "Chưa nhận được tiền" → bỏ trạng thái báo; "Xác nhận đã nhận tiền" → đã thanh toán + báo + email khách (chỉ khi vừa chuyển sang đã trả)', async () => {
+        reset(); await claim('ORD-1791176872988', '0354334944'); notices.length = 0; mails.length = 0;
+        let r = await H.call(OrderCtl.rejectPaymentClaim, { params: { id: '1' }, user: { id: 7, username: 'admin' } });
+        assert.strictEqual(r.code, 200); assert.strictEqual(orders[0].payment_claimed_at, null);
+        assert.strictEqual((await H.call(OrderCtl.rejectPaymentClaim, { params: { id: '99' } })).code, 404);
+        const Order = require(src('models/Order.js'));
+        Order.updatePaymentStatus = OrderStub.updatePaymentStatus;
+        r = await H.call(OrderCtl.updatePaymentStatus, { params: { id: '1' }, body: { payment_status: 'paid' }, user: { id: 7, username: 'admin' } });
+        assert.strictEqual(r.code, 200); assert.deepStrictEqual(notices, [['received', 'ORD-1791176872988', 'admin']]); assert.deepStrictEqual(mails.map((m) => m[0]), ['customer']);
+        await H.call(OrderCtl.updatePaymentStatus, { params: { id: '1' }, body: { payment_status: 'paid' }, user: { id: 7, username: 'admin' } });
+        assert.strictEqual(notices.length, 1, 'đã trả rồi thì không báo / email lại');
+    });
+
+    console.log('Cài đặt tài khoản nhận tiền (admin)');
+    const save = (body) => H.call(PayCtl.saveSettings, { body, user: { id: 7, role: 'admin' } });
+    await test('lưu tài khoản: chọn ngân hàng, số TK chỉ gồm số, tên tự viết hoa bỏ dấu; dữ liệu sai → 400', async () => {
+        reset();
+        let r = await save({ bank_code: 'vcb', account_no: '1012 3456 78', account_name: 'Mùi Hoàng Đông' });
+        assert.strictEqual(r.code, 200, JSON.stringify(r.body));
+        assert.deepStrictEqual(settings, { bank_code: 'VCB', bank_account_no: '1012345678', bank_account_name: 'MUI HOANG DONG' });
+        assert.strictEqual(r.body.data.active.bank_name, 'Vietcombank'); assert.strictEqual(r.body.data.active.source, 'settings');
+        assert.match(r.body.data.sample_qr, /^data:image\/png;base64,/);
+        for (const [body, re] of [[{ bank_code: 'XYZ', account_no: '1012345678', account_name: 'AN' }, /chọn ngân hàng/], [{ bank_code: 'VCB', account_no: '12ab', account_name: 'MUI HOANG DONG' }, /chữ số/], [{ bank_code: 'VCB', account_no: '1012345678', account_name: '!!' }, /tên chủ tài khoản/i]]) {
+            r = await save(body); assert.strictEqual(r.code, 400, JSON.stringify(body)); assert.match(r.body.message, re);
+        }
+    });
+    await test('tài khoản nhập ở trang Cài đặt được ưu tiên hơn .env; xóa (để trống cả 3 ô) thì quay về .env; mã QR của đơn dùng đúng tài khoản', async () => {
+        reset(); setBank({ BANK_CODE: 'MB', BANK_ACCOUNT_NO: '0354334944', BANK_ACCOUNT_NAME: 'SHOPPC ENV' });
+        let info = await Pay.paymentInfo(orders[0]); assert.strictEqual(info.bank.account_no, '0354334944');
+        await save({ bank_code: 'VCB', account_no: '1012345678', account_name: 'MUI HOANG DONG' });
+        info = await Pay.paymentInfo(orders[0]);
+        assert.deepStrictEqual(info.bank, { bank_name: 'Vietcombank', account_no: '1012345678', account_name: 'MUI HOANG DONG' });
+        await save({ bank_code: '', account_no: '', account_name: '' });
+        assert.deepStrictEqual(settings, {}); info = await Pay.paymentInfo(orders[0]); assert.strictEqual(info.bank.account_no, '0354334944');
+        setBank({}); BankSettings._clearCache();
+        const view = await H.call(PayCtl.getSettings, { user: { id: 7, role: 'admin' } });
+        assert.strictEqual(view.body.data.active, null); assert.strictEqual(view.body.data.sample_qr, null); assert(view.body.data.banks.some((b) => b.code === 'VCB'));
+    });
+    await test('quyền: xem/lưu tài khoản nhận tiền chỉ admin; "đã chuyển khoản" công khai có giới hạn tần suất; "chưa nhận được tiền" cần nhân viên', () => {
+        const find = (r, m, p) => r.routes.find((x) => x.method === m && x.path === p).handlers;
+        for (const m of ['get', 'put']) assert.deepStrictEqual(find(paymentRoutes, m, '/settings').slice(0, 2), [Auth.authenticate, Auth.authorizeAdmin]);
+        const c = find(orderRoutes, 'post', '/payment/:orderCode/claim'); assert.strictEqual(c.length, 2); assert(!c.includes(Auth.authenticate));
+        assert.deepStrictEqual(find(orderRoutes, 'patch', '/:id(\\d+)/payment-claim').slice(0, 2), [Auth.authenticate, Auth.authorizeStaff]);
     });
 
     done(); setImmediate(() => process.exit(process.exitCode || 0));

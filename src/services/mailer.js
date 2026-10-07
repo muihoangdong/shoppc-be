@@ -134,4 +134,53 @@ const sendEmailChangeOtp = ({ email, name, code, ttlMinutes }) =>
         unconfigured: 'Hệ thống chưa cấu hình gửi email nên chưa đổi email được. Vui lòng liên hệ cửa hàng.'
     });
 
-module.exports = { sendPasswordReset, sendRegisterOtp, sendEmailChangeOtp, isConfigured };
+const money = (n) => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}₫`;
+const adminUrl = () => (process.env.ADMIN_URL || 'http://localhost:3002').replace(/\/$/, '');
+const shopInbox = () => process.env.SHOP_NOTIFY_EMAIL || process.env.SMTP_USER;
+
+/** Gửi email "thông báo" (không quan trọng bằng request chính): lỗi chỉ ghi log, không ném ra ngoài. */
+async function sendNotice({ to, subject, text }) {
+    const transport = loadTransport();
+    if (!transport || !to) {
+        console.log(`[mailer] (chưa cấu hình SMTP — không gửi email) ${subject}`);
+        return { delivered: false };
+    }
+    try {
+        await transport.sendMail({ from: fromAddress(), to, subject, text });
+        return { delivered: true };
+    } catch (error) {
+        console.error('[mailer] Gửi email thông báo thất bại:', error.code || '', error.message);
+        return { delivered: false };
+    }
+}
+
+/** Báo cửa hàng: khách vừa bấm "Tôi đã chuyển khoản" — nhân viên kiểm tra app ngân hàng rồi xác nhận. */
+const sendPaymentClaimToShop = (order) => sendNotice({
+    to: shopInbox(),
+    subject: `[Shoppc] Khách báo đã chuyển khoản đơn ${order.order_code} — ${money(order.total_amount)}`,
+    text: [
+        `Khách ${order.customer_name} (${order.customer_phone}) báo đã chuyển khoản cho đơn ${order.order_code}.`,
+        '',
+        `Số tiền cần nhận: ${money(order.total_amount)}`,
+        `Nội dung chuyển khoản: ${String(order.order_code).replace(/[^0-9A-Za-z]/g, '').toUpperCase()}`,
+        '',
+        'Hãy kiểm tra app ngân hàng. Đã nhận đủ tiền thì mở đơn trên trang quản trị và bấm "Xác nhận đã nhận tiền":',
+        `${adminUrl()}/admin/orders?open=${order.id}`,
+    ].join('\n'),
+});
+
+/** Báo khách: cửa hàng đã nhận được tiền. */
+const sendPaymentReceivedToCustomer = (order) => sendNotice({
+    to: order.customer_email,
+    subject: `Shoppc đã nhận thanh toán đơn ${order.order_code}`,
+    text: [
+        `Chào ${order.customer_name},`,
+        '',
+        `Shoppc đã nhận được ${money(order.total_amount)} cho đơn ${order.order_code}. Cửa hàng sẽ sớm chuẩn bị và giao hàng cho bạn.`,
+        `Theo dõi đơn hàng: ${(process.env.FRONTEND_URL || 'http://localhost:3001').replace(/\/$/, '')}/account/orders/${encodeURIComponent(order.order_code)}`,
+        '',
+        'Cảm ơn bạn đã mua sắm tại Shoppc!',
+    ].join('\n'),
+});
+
+module.exports = { sendPasswordReset, sendRegisterOtp, sendEmailChangeOtp, sendPaymentClaimToShop, sendPaymentReceivedToCustomer, isConfigured };

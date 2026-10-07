@@ -150,8 +150,13 @@ class OrderController {
         try {
             const { payment_status } = req.body || {};
             if (!isStr(payment_status)) return res.status(400).json({ success: false, message: 'Thiếu trạng thái thanh toán' });
-            const order = await OrderModel.updatePaymentStatus(Number(req.params.id), payment_status);
-            Events.orderUpdated(order, req.user ? { id: req.user.id, name: req.user.username } : null);
+            const id = Number(req.params.id);
+            const before = await OrderModel.getOrderById(id);
+            const order = await OrderModel.updatePaymentStatus(id, payment_status);
+            const by = req.user ? { id: req.user.id, name: req.user.username } : null;
+            Events.orderUpdated(order, by);
+            // Vừa xác nhận đã nhận tiền: báo các nhân viên khác + email cảm ơn khách
+            if (payment_status === 'paid' && before && before.payment_status !== 'paid') Payments.afterPaid(order, by);
             res.json({ success: true, message: 'Cập nhật thanh toán thành công', data: order });
         } catch (error) {
             sendError(res, error);
@@ -173,6 +178,35 @@ class OrderController {
 
             const items = await OrderModel.getOrderItems(order.id);
             res.json({ success: true, data: { ...OrderModel.publicOrder(order), items } });
+        } catch (error) {
+            sendError(res, error);
+        }
+    }
+
+    /** Khách bấm "Tôi đã chuyển khoản" (công khai, cần đúng SĐT đặt hàng như trang thanh toán). */
+    static async claimPayment(req, res) {
+        try {
+            const notFound = () => res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+            const phone = req.query && req.query.phone;
+            if (!isStr(req.params.orderCode) || !isStr(phone) || digits(phone).length < 8) return notFound();
+            const order = await OrderModel.getOrderByCode(req.params.orderCode);
+            if (!order || digits(order.customer_phone) !== digits(phone)) return notFound();
+            const { order: updated } = await Payments.claimPayment(order);
+            res.json({ success: true, message: 'Đã báo cửa hàng. Đơn sẽ được xác nhận ngay khi cửa hàng nhận được tiền.', data: await Payments.paymentInfo(updated) });
+        } catch (error) {
+            sendError(res, error);
+        }
+    }
+
+    /** Nhân viên chưa thấy tiền về: bỏ trạng thái "khách báo đã chuyển khoản" (khách sẽ thấy và báo lại được). */
+    static async rejectPaymentClaim(req, res) {
+        try {
+            const id = Number(req.params.id);
+            const order = await OrderModel.getOrderById(id);
+            if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng' });
+            const updated = await OrderModel.clearPaymentClaim(id);
+            Events.orderUpdated(updated, req.user ? { id: req.user.id, name: req.user.username } : null);
+            res.json({ success: true, message: 'Đã ghi nhận: chưa nhận được tiền', data: updated });
         } catch (error) {
             sendError(res, error);
         }

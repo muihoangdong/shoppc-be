@@ -42,6 +42,16 @@ module.exports = {
         hub.publish('staff', 'stats:dirty', { reason: 'product:changed' });
     }),
     categoryChanged: safe(() => hub.publish('staff', 'category:changed', {})),
+    /** Khách bấm "Tôi đã chuyển khoản" -> mọi nhân viên (toast + âm báo + chuông thông báo). */
+    paymentClaimed: safe((order) => {
+        hub.publish('staff', 'payment:claimed', { ...orderBrief(order), payment_claimed_at: order.payment_claimed_at || new Date() });
+        hub.publish('staff', 'stats:dirty', { reason: 'payment:claimed' });
+    }),
+    /** Đơn vừa được xác nhận đã thanh toán (nhân viên bấm hoặc SePay tự xác nhận). */
+    paymentReceived: safe((order, by) => {
+        hub.publish('staff', 'payment:received', { ...orderBrief(order), by: by || null });
+        hub.publish('staff', 'stats:dirty', { reason: 'payment:received' });
+    }),
     /** Khách gửi / sửa đánh giá -> trang Đánh giá của nhân viên tự làm mới. */
     reviewChanged: safe((review) => hub.publish('staff', 'review:changed', review ? { id: review.id, product_id: review.product_id, rating: review.rating } : {})),
     /** Gửi sự kiện tùy ý tới một kênh. */

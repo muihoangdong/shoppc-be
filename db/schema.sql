@@ -12,6 +12,7 @@
 --   - thêm bảng email_otps: mã OTP xác nhận email khi đăng ký (tài khoản chỉ được tạo sau khi nhập đúng mã)
 --   - thêm bảng coupons + cột orders.coupon_code: mã giảm giá (theo % hoặc số tiền, đơn tối thiểu, hạn dùng, số lượt)
 --   - thêm bảng product_reviews: đánh giá sản phẩm (chỉ khách đã nhận hàng), mỗi khách 1 đánh giá / sản phẩm
+--   - thêm bảng shop_settings (cài đặt cửa hàng, VD tài khoản nhận chuyển khoản) + cột orders.payment_claimed_at (khách báo đã chuyển khoản)
 --   - GIỮ NGUYÊN các cột/bảng cũ code hiện chưa dùng (tracking_number, admin_note, product_sku, shipping_tracking) để không mất dữ liệu
 -- Lưu ý: mỗi bảng KHÔNG có comment bên trong ngoặc CREATE TABLE (bộ phân tích của npm run migrate-db đọc file này).
 -- =====================================================================
@@ -101,6 +102,7 @@ CREATE TABLE IF NOT EXISTS `orders` (
   `payment_method` enum('cod','banking','momo','zalopay','vnpay') NOT NULL DEFAULT 'cod',
   `payment_status` enum('pending','paid','failed','refunded') NOT NULL DEFAULT 'pending',
   `payment_id` varchar(100) DEFAULT NULL,
+  `payment_claimed_at` timestamp NULL DEFAULT NULL,
   `status` enum('pending','processing','shipped','delivered','completed','cancelled') NOT NULL DEFAULT 'pending',
   `tracking_number` varchar(100) DEFAULT NULL,
   `admin_note` text,
@@ -261,4 +263,11 @@ CREATE TABLE IF NOT EXISTS `product_reviews` (
   CONSTRAINT `fk_reviews_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_reviews_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_reviews_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `shop_settings` (
+  `setting_key` varchar(64) NOT NULL,
+  `setting_value` text,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`setting_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

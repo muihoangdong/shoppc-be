@@ -19,6 +19,11 @@ router.get(
     OrderController.getPayment
 );
 router.post(
+    '/payment/:orderCode/claim',
+    rateLimit({ windowMs: 10 * 60 * 1000, max: 10, message: 'Bạn thao tác quá nhiều lần, vui lòng thử lại sau ít phút.' }),
+    OrderController.claimPayment
+);
+router.post(
     '/',
     rateLimit({ windowMs: HOUR, max: 15, message: 'Bạn đã đặt quá nhiều đơn trong thời gian ngắn, vui lòng thử lại sau.' }),
     optionalAuth, // khách đã đăng nhập: gắn đơn vào tài khoản (để được đánh giá sản phẩm đã mua)
@@ -43,5 +48,6 @@ router.get('/:id(\\d+)', authenticate, authorizeStaff, OrderController.getOrderB
 router.get('/:id(\\d+)/items', authenticate, authorizeStaff, OrderController.getOrderItems);
 router.patch('/:id(\\d+)/status', authenticate, authorizeStaff, OrderController.updateOrderStatus);
 router.patch('/:id(\\d+)/payment', authenticate, authorizeStaff, OrderController.updatePaymentStatus);
+router.patch('/:id(\\d+)/payment-claim', authenticate, authorizeStaff, OrderController.rejectPaymentClaim);
 
 module.exports = router;
