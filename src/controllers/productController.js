@@ -5,6 +5,7 @@ const { sendError } = require('../utils/http');
 const Events = require('../realtime/events');
 
 const { PART_KEYS, parseBuildSpecs } = require('../config/pcParts');
+const { parseModel3d } = require('../config/product3d');
 
 const CATEGORY_TYPES = ['pc', 'component', 'peripheral'];
 
@@ -21,7 +22,10 @@ function parseProduct(body, { partial }) {
         specs: v.specs(b.specs),
         // Build PC: loại linh kiện ('' / null = không phải linh kiện) + thông số kiểm tra tương thích
         part_type: b.part_type === undefined ? undefined : (b.part_type === '' || b.part_type === null ? null : v.oneOf(b.part_type, 'Loại linh kiện', PART_KEYS)),
-        build_specs: b.build_specs
+        build_specs: b.build_specs,
+        // Giá niêm yết trước giảm (hiện gạch ngang + % giảm). null / '' = không giảm giá
+        original_price: b.original_price === undefined ? undefined : (b.original_price === null || b.original_price === '' ? null : v.int(b.original_price, 'Giá gốc', { min: 0, max: 1e12 })),
+        model_3d: parseModel3d(b.model_3d, v.fail)
     };
     if (out.part_type === null) out.build_specs = null;
     else if (out.part_type) out.build_specs = parseBuildSpecs(out.part_type, b.build_specs, v.fail);

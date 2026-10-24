@@ -99,7 +99,7 @@ const capture = (fn) => H.capture(fn);
         const issues = Schema.classify(Schema.diff(legacy, target));
         const by = (lv) => issues.filter((i) => i.level === lv);
         assert.strictEqual(by('critical').length, 1); assert(/orders\.status.*shipped.*completed/.test(by('critical')[0].message));
-        assert.deepStrictEqual(by('warning').map((i) => i.op.table).sort(), ['coupons', 'email_otps', 'orders', 'orders', 'product_reviews', 'products', 'products', 'shop_settings', 'support_conversations', 'support_messages']);
+        assert.deepStrictEqual(by('warning').map((i) => i.op.table).sort(), ['coupons', 'email_otps', 'orders', 'orders', 'product_reviews', 'products', 'products', 'products', 'products', 'shop_settings', 'support_conversations', 'support_messages']);
         assert.strictEqual(by('info').length, 7);
         assert.deepStrictEqual(Schema.classify(Schema.diff(target, target)), []);
     });
@@ -168,9 +168,9 @@ const capture = (fn) => H.capture(fn);
     await test('xem trước (mặc định) KHÔNG thay đổi gì; --apply thực hiện; chạy lần hai báo đã khớp', async () => {
         const sim = createSim(legacy, ORDER_ROWS()); const out = []; const log = (l) => out.push(l);
         let r = await Migrate.run({ db: sim, args: [], log, target, dbName: 'shopdb' });
-        assert.strictEqual(r.dryRun, true); assert.strictEqual(sim.state.log.length, 0, 'xem trước không chạy lệnh nào'); assert(/Cần 26 bước/.test(out.join('\n')) && /migrate-db -- --apply/.test(out.join('\n')) && /mysqldump/.test(out.join('\n')) && /"shopdb"/.test(out.join('\n')));
+        assert.strictEqual(r.dryRun, true); assert.strictEqual(sim.state.log.length, 0, 'xem trước không chạy lệnh nào'); assert(/Cần 28 bước/.test(out.join('\n')) && /migrate-db -- --apply/.test(out.join('\n')) && /mysqldump/.test(out.join('\n')) && /"shopdb"/.test(out.join('\n')));
         assert.deepStrictEqual(sim.state.rows.orders.map((x) => x.status), ['pending', 'confirmed', 'shipping', 'delivered', 'cancelled', 'shipping'], 'dữ liệu chưa bị đụng');
-        out.length = 0; r = await Migrate.run({ db: sim, args: ['--apply'], log, target }); assert.strictEqual(r.ok, true); assert.strictEqual(r.applied, 26); assert(/Xong \(26 bước\)/.test(out.join('\n')));
+        out.length = 0; r = await Migrate.run({ db: sim, args: ['--apply'], log, target }); assert.strictEqual(r.ok, true); assert.strictEqual(r.applied, 28); assert(/Xong \(28 bước\)/.test(out.join('\n')));
         out.length = 0; r = await Migrate.run({ db: sim, args: ['--apply'], log, target }); assert.strictEqual(r.applied, 0); assert(/đã khớp với code/.test(out.join('\n')));
     });
     await test('lỗi giữa chừng: báo rõ, các bước trước còn nguyên, chạy lại thì tiếp tục từ chỗ dở', async () => {

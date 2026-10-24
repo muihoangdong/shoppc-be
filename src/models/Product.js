@@ -17,7 +17,8 @@ class Product {
         return {
             ...row,
             specs: parse(row.specs) || {},
-            ...(row.build_specs !== undefined ? { build_specs: parse(row.build_specs) || null } : {})
+            ...(row.build_specs !== undefined ? { build_specs: parse(row.build_specs) || null } : {}),
+            ...(row.model_3d !== undefined ? { model_3d: parse(row.model_3d) || null } : {})
         };
     }
 
@@ -178,14 +179,17 @@ class Product {
             image_url = null,
             specs = {},
             part_type = null,
-            build_specs = null
+            build_specs = null,
+            original_price = null,
+            model_3d = null
         } = productData;
 
         const [result] = await db.pool.query(
             `INSERT INTO products (
                 name, description, price, stock,
-                category_id, image_url, specs, part_type, build_specs
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                category_id, image_url, specs, part_type, build_specs,
+                original_price, model_3d
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 name,
                 description,
@@ -195,7 +199,9 @@ class Product {
                 image_url,
                 JSON.stringify(specs || {}),
                 part_type || null,
-                build_specs ? JSON.stringify(build_specs) : null
+                build_specs ? JSON.stringify(build_specs) : null,
+                original_price || null,
+                model_3d ? JSON.stringify(model_3d) : null
             ]
         );
 
@@ -212,7 +218,9 @@ class Product {
             'image_url',
             'specs',
             'part_type',
-            'build_specs'
+            'build_specs',
+            'original_price',
+            'model_3d'
         ];
 
         const entries = Object.entries(productData)
@@ -223,6 +231,8 @@ class Product {
                 if (key === 'specs') return [key, JSON.stringify(value || {})];
                 if (key === 'build_specs') return [key, value ? JSON.stringify(value) : null];
                 if (key === 'part_type') return [key, value || null];
+                if (key === 'model_3d') return [key, value ? JSON.stringify(value) : null];
+                if (key === 'original_price') return [key, value || null];
                 return [key, value];
             });
 

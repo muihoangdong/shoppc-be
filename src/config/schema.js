@@ -254,6 +254,9 @@ function classify(plan) {
         } else if (op.table === 'products' && op.kind === 'add-column' && ['part_type', 'build_specs'].includes(op.column)) {
             level = 'warning';
             message = `Thiếu cột products.${op.column}: trang Build PC (tự chọn cấu hình) sẽ báo lỗi.`;
+        } else if (op.table === 'products' && op.kind === 'add-column' && ['original_price', 'model_3d'].includes(op.column)) {
+            level = 'warning';
+            message = `Thiếu cột products.${op.column}: thêm/sửa sản phẩm (giá gốc, mô hình 3D/AR) sẽ báo lỗi.`;
         } else if (op.table === 'email_otps') {
             level = 'warning';
             message = op.kind === 'create-table'

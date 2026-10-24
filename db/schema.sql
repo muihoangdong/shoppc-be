@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS `products` (
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `part_type` enum('cpu','mainboard','ram','vga','storage','psu','case','cooler') DEFAULT NULL,
   `build_specs` json DEFAULT NULL,
+  `original_price` decimal(15,2) DEFAULT NULL,
+  `model_3d` json DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `category_id` (`category_id`),
   CONSTRAINT `products_ibfk_1` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`),
