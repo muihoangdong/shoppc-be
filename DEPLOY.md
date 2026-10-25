@@ -13,7 +13,8 @@ Dự án gồm 3 phần: `shoppc-be` (API Node/Express + MySQL), `shoppc-fe` (c�
 Xem **`DATABASE.md`**. Tóm tắt: sao lưu, rồi `npm run migrate-db` (xem trước) và `npm run migrate-db -- --apply`. Lệnh này so database với `db/schema.sql` và chỉ thêm/sửa, không xóa dữ liệu. `npm run fix-roles` vẫn dùng riêng để hạ quyền tài khoản (xem `ROLES.md`).
 
 ## Lên production (ví dụ Render)
-- File `render.yaml` ở thư mục gốc là mẫu Blueprint cho 1 backend + 2 trang tĩnh (có sẵn rewrite SPA).
+- File `render.yaml` trong repo này là Blueprint cho backend (Render → New → Blueprint, vùng Singapore). Database: MySQL bên ngoài (ví dụ Aiven, đặt cùng vùng với backend), `DB_SSL=true`; tạo bảng bằng `npm run migrate-db -- --apply` từ máy local với `.env` trỏ tới database đó.
+- `shoppc-fe` và `shoppc-admin` deploy riêng lên Vercel (Framework: Vite, output `dist`).
 - Bắt buộc ở backend: `NODE_ENV=production`, `JWT_SECRET`, thông tin DB, `CORS_ORIGINS` = domain của cửa hàng và trang admin, `TRUST_PROXY=1`.
 - Backend có `Dockerfile` nếu muốn chạy bằng Docker; health check: `/health` (sống) và `/health/ready` (kết nối được DB).
 - Frontend: đặt `VITE_API_URL` trỏ về backend. File `public/_redirects` (Netlify) và `vercel.json` (Vercel) đã có rewrite để F5 ở đường dẫn sâu không bị 404.

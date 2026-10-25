@@ -1,0 +1,66 @@
+# Blueprint Render cho backend Shoppc (Render → New → Blueprint → chọn repo shoppc-be)
+# Các biến "sync: false" sẽ được Render hỏi khi tạo; điền trong mục Environment, KHÔNG commit giá trị thật.
+services:
+  - type: web
+    name: shoppc-be
+    runtime: node
+    region: singapore
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health/ready
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "20"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: APP_TIMEZONE
+        value: Asia/Ho_Chi_Minh
+      # Chuỗi ngẫu nhiên do Render tự tạo
+      - key: JWT_SECRET
+        generateValue: true
+
+      # ── Database (Aiven MySQL) ──
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        value: shopdb
+      - key: DB_SSL
+        value: "true"
+
+      # ── Domain của 2 trang frontend (điền sau khi deploy Vercel) ──
+      - key: CORS_ORIGINS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: ADMIN_URL
+        sync: false
+
+      # ── Email (OTP đăng ký, quên mật khẩu, báo chuyển khoản) ──
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: SHOP_NOTIFY_EMAIL
+        sync: false
+
+      # ── Chatbot AI ──
+      - key: AI_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
