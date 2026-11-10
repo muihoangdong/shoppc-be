@@ -27,6 +27,7 @@ async function main() {
         const Catalog = require('../src/services/operationsCatalog');
         const Inventory = require('../src/services/operationsInventory');
         const Warranty = require('../src/services/operationsWarranty');
+        const Customer = require('../src/services/customerFeatures');
         const After = require('../src/services/operationsAftersales');
         const Bulk = require('../src/services/operationsBulk');
         const Product = require('../src/models/Product');
@@ -88,6 +89,8 @@ async function main() {
         await rejects(() => Warranty.updateWarranty(ticket.id, { status: 'repairing' }, staff), /Không thể chuyển/);
         assert.equal(await scalar('SELECT status FROM product_serials WHERE id=?', [serialId]), 'sold');
         console.log('✓ Bảo hành tiếp nhận một lần, kiểm tra/sửa/xử lý và trả serial về trạng thái đã bán');
+        assert.equal((await Customer.warranties({ id: 3 }, {}))[0].tickets.length, 1);
+        assert.equal((await Customer.warranties({ id: 2 }, {})).length, 0);
 
         await rejects(() => After.createReturn({ order_item_id: item.id, quantity: 2, reason: 'Trả quá số lượng' }, staff), /vượt số lượng/);
         const ret = await After.createReturn({ order_item_id: item.id, quantity: 1, reason: 'Trả thử nghiệm' }, staff);
@@ -131,6 +134,62 @@ async function main() {
         assert.match(protectedStock.items[0].error, /đã có serial/);
         console.log('✓ CSV xem trước, áp dụng nguyên giao dịch, chặn bản xem trước cũ và xuất an toàn cho Excel');
 
+        const customer = { id: 3, role: 'customer', username: 'ops_customer' };
+        await Customer.setWishlist(customer, serialized, true);
+        await Customer.setWishlist(customer, serialized, true);
+        assert.equal((await Customer.wishlist(customer)).length, 1);
+        assert.equal((await Customer.wishlist(staff)).length, 0);
+        await Customer.setWishlist(staff, ordinary, true);
+        await Customer.setWishlist(customer, ordinary, false);
+        assert.equal((await Customer.wishlist(staff)).length, 1);
+        assert.equal((await Customer.specFields())[0].fields[0].key, 'Socket');
+
+        const newOrder = await buy(serialized);
+        await Order.updateOrderStatus(newOrder.id, 'processing', admin.id);
+        const newItem = (await Catalog.orderItems(newOrder.id))[0];
+        await Warranty.assignSerial(serialId, { order_item_id: newItem.id }, staff);
+        assert.equal((await Customer.warranties(customer, {}))[0].tickets.length, 0, 'Không hiện phiếu bảo hành từ lần bán trước');
+        await Order.updateOrderStatus(newOrder.id, 'shipped', admin.id);
+        await Order.updateOrderStatus(newOrder.id, 'delivered', admin.id);
+        await Warranty.createWarranty({ serial_id: serialId, issue: 'Kiểm tra bảo hành trên trang khách hàng' }, staff);
+        assert.equal((await Customer.warranties(customer, { search: 'SERIAL-A' }))[0].tickets.length, 1);
+        await rejects(() => Customer.createReturn(staff, { order_item_id: newItem.id, quantity: 1, reason: 'Sai chủ đơn' }), /Không tìm thấy/);
+        const customerReturn = await Customer.createReturn(customer, { order_item_id: newItem.id, quantity: 1, reason: 'Kiểm tra đổi trả từ tài khoản', refund_amount: 999999999 });
+        assert.equal(Number((await Customer.returns(customer)).find((r) => r.id === customerReturn.id).refund_amount), 1000, 'Bỏ qua refund_amount từ FE');
+        await rejects(() => Customer.cancelReturn(staff, customerReturn.id), /Không tìm thấy/);
+        await Customer.cancelReturn(customer, customerReturn.id);
+        assert((await Customer.returnItems(customer, { order: newOrder.order_code })).some((i) => i.id === newItem.id));
+        assert.equal((await Customer.returnItems(staff, {})).length, 0);
+
+        const mailer = require('../src/services/mailer');
+        mailer.isConfigured = () => false;
+        const notifyProduct = await Product.createProduct({ name: 'RAM chờ hàng', price: 500000, stock: 0, category_id: 1, sku: 'RAM-ALERT' }, admin);
+        await rejects(() => Customer.setAlert(customer, notifyProduct, true), /chưa cấu hình/);
+        mailer.isConfigured = () => true;
+        await Customer.setAlert(customer, notifyProduct, true);
+        await Customer.setAlert(customer, notifyProduct, true);
+        assert.equal((await Customer.state(customer)).alerts.length, 1);
+        const worker = require('../src/services/stockAlertWorker');
+        let sent = 0, failMail = true;
+        mailer.sendRestockNotice = async (message) => { assert.equal(message.email, 'ops_customer@example.invalid'); if (failMail) return { delivered: false }; sent++; return { delivered: true }; };
+        assert.equal((await worker.processBatch()).sent, 0, 'Chưa gửi khi hết hàng');
+        await Inventory.adjustStock(notifyProduct, 2, admin, 'Kiểm tra email hàng về');
+        await worker.processBatch();
+        assert.equal(await scalar('SELECT status FROM stock_alerts WHERE product_id=?', [notifyProduct]), 'pending');
+        failMail = false;
+        assert.equal((await worker.processBatch()).sent, 0, 'Chờ đến lần thử lại, không gửi dồn');
+        await db.query('UPDATE stock_alerts SET next_attempt_at=NULL WHERE product_id=?', [notifyProduct]);
+        await Promise.all([worker.processBatch(), worker.processBatch()]);
+        assert.equal(sent, 1, 'Hai worker không gửi trùng trong cùng lượt');
+        await worker.processBatch(); assert.equal(sent, 1);
+        await Inventory.adjustStock(notifyProduct, 0, admin, 'Chuẩn bị kiểm thử hủy báo');
+        await Customer.setAlert(customer, notifyProduct, true);
+        await Customer.setAlert(customer, notifyProduct, false);
+        await Inventory.adjustStock(notifyProduct, 1, admin, 'Hàng về sau khi hủy báo');
+        await worker.processBatch(); assert.equal(sent, 1);
+        await Inventory.adjustStock(notifyProduct, 0, admin, 'Chuẩn bị giao diện đăng ký báo hàng');
+        console.log('✓ FE: yêu thích lưu thật, cách ly tài khoản, bảo hành đúng lần bán, đổi trả đúng chủ đơn; email retry, chống gửi đồng thời và hủy đăng ký');
+
         const app = require('../src/app');
         server = app.listen(process.argv.includes('--serve') ? 3100 : 0, '127.0.0.1');
         await new Promise((resolve) => server.once('listening', resolve));
@@ -138,6 +197,14 @@ async function main() {
         const { signAccessToken } = require('../src/config/jwt');
         const call = (path, actor, method = 'GET', body) => fetch(`${base}${path}`, { method, headers: { ...(actor ? { Authorization: `Bearer ${signAccessToken(actor)}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
         assert.equal((await call('/operations/lookups')).status, 401);
+        assert.equal((await call('/customer/wishlist')).status, 401);
+        assert.equal((await call('/customer/spec-fields')).status, 200);
+        assert.equal((await call(`/customer/wishlist/${serialized}`, customer, 'PUT')).status, 200);
+        assert.equal((await call(`/customer/wishlist/${serialized}`, customer, 'PUT')).status, 200);
+        assert.equal((await (await call('/customer/wishlist', customer)).json()).data.length, 1);
+        assert.equal((await call('/customer/returns', staff, 'POST', { order_item_id: newItem.id, quantity: 1, reason: 'Không thuộc tài khoản' })).status, 404);
+        assert.equal((await call(`/customer/returns/${customerReturn.id}/cancel`, customer, 'POST')).status, 409);
+        assert.equal((await call('/customer/warranties?search[bad]=1', customer)).status, 400);
         assert.equal((await call('/operations/lookups', { id: 3, username: 'ops_customer', role: 'customer' })).status, 403);
         assert.equal((await call('/operations/audit', staff)).status, 403);
         assert.equal((await call('/operations/brands', staff, 'POST', { name: 'Không được phép' })).status, 403);

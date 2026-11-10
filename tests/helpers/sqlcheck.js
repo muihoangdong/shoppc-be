@@ -87,6 +87,7 @@ function validateSql(sql, schema) {
     const re = /\b(from|join|update|into)\s+([a-z_][a-z0-9_]*)(\.[a-z_][a-z0-9_]*)?(?:\s+(?:as\s+)?([a-z_][a-z0-9_]*))?/g;
     let m;
     while ((m = re.exec(s))) {
+        if (m[1] === 'update' && /\bon\s+duplicate\s+key\s*$/.test(s.slice(0, m.index))) continue;
         if (m[3]) continue; // schema.table (information_schema...)
         const t = m[2];
         if (t === '__x__') continue;

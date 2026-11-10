@@ -90,6 +90,7 @@ async function createReturn(b, actor) {
     return transaction(actor, 'return.create', 'return', async (client) => {
         const item = await one(client, 'SELECT * FROM order_items WHERE id = ?', [itemId], 'Dòng đơn hàng');
         const order = await one(client, 'SELECT * FROM orders WHERE id = ? FOR UPDATE', [item.order_id], 'Đơn hàng');
+        if (actor.role === 'customer' && Number(order.user_id) !== Number(actor.id)) fail('Không tìm thấy dòng đơn hàng', 404);
         if (!['delivered', 'completed'].includes(order.status)) fail('Chỉ đổi trả đơn đã giao hoặc hoàn tất');
         const [used] = await rows(client, "SELECT COALESCE(SUM(quantity),0) AS quantity FROM return_requests WHERE order_item_id = ? AND status NOT IN ('rejected','cancelled')", [item.id]);
         if (Number(used.quantity) + quantity > Number(item.quantity)) fail('Số lượng trả vượt số lượng mua còn lại');

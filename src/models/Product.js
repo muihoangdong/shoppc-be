@@ -26,9 +26,10 @@ class Product {
 
     static async getAllProducts(filters = {}) {
         let sql = `
-            SELECT p.*, c.name AS category_name, c.type AS category_type
+            SELECT p.*, c.name AS category_name, c.type AS category_type, b.name AS brand_name
             FROM products p
             LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN brands b ON b.id = p.brand_id
             WHERE 1=1
         `;
 
@@ -82,9 +83,10 @@ class Product {
 
     static async getProductById(id) {
         const rows = await db.query(
-            `SELECT p.*, c.name AS category_name, c.type AS category_type
+            `SELECT p.*, c.name AS category_name, c.type AS category_type, b.name AS brand_name
              FROM products p
              LEFT JOIN categories c ON p.category_id = c.id
+             LEFT JOIN brands b ON b.id = p.brand_id
              WHERE p.id = ?`,
             [id]
         );

@@ -29,8 +29,8 @@ const capture = (fn) => H.capture(fn);
 
 (async () => {
     console.log('Schema chuẩn');
-    await test('đọc được 24 bảng; mỗi bảng có khóa chính; khóa ngoại trỏ tới bảng/cột có thật', () => {
-        assert.deepStrictEqual(target.order, ['users', 'categories', 'brands', 'spec_templates', 'products', 'cart_items', 'orders', 'order_items', 'order_status_history', 'shipping_tracking', 'support_conversations', 'support_messages', 'email_otps', 'coupons', 'product_reviews', 'shop_settings', 'suppliers', 'purchase_receipts', 'purchase_receipt_items', 'inventory_movements', 'product_serials', 'warranty_tickets', 'return_requests', 'audit_logs']);
+    await test('đọc được 26 bảng; mỗi bảng có khóa chính; khóa ngoại trỏ tới bảng/cột có thật', () => {
+        assert.deepStrictEqual(target.order, ['users', 'categories', 'brands', 'spec_templates', 'products', 'cart_items', 'orders', 'order_items', 'order_status_history', 'shipping_tracking', 'support_conversations', 'support_messages', 'email_otps', 'coupons', 'product_reviews', 'shop_settings', 'suppliers', 'purchase_receipts', 'purchase_receipt_items', 'inventory_movements', 'product_serials', 'warranty_tickets', 'return_requests', 'audit_logs', 'wishlists', 'stock_alerts']);
         for (const t of Object.values(target.tables)) {
             assert(t.indexes.some((i) => i.primary), `${t.name} thiếu khóa chính`);
             for (const f of t.foreignKeys) { assert(target.tables[f.refTable], `${t.name}.${f.column} -> bảng ${f.refTable} không có`); assert(target.tables[f.refTable].columns.some((c) => c.name === f.refColumn)); assert(t.columns.some((c) => c.name === f.column)); }
@@ -67,6 +67,8 @@ const capture = (fn) => H.capture(fn);
         assert(validateSql('INSERT INTO users (username, email) VALUES (?, ?)', target).some((p) => /thiếu cột bắt buộc: password/.test(p)));
         assert(validateSql('INSERT INTO order_items (order_id, quantity) VALUES (?, ?)', target).some((p) => /thiếu cột bắt buộc: product_id/.test(p)));
         assert.deepStrictEqual(validateSql('INSERT INTO cart_items (session_id, product_id, quantity) VALUES (?, ?, ?)', target), []);
+        assert.deepStrictEqual(validateSql("INSERT INTO stock_alerts (user_id, product_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE status = 'pending'", target), []);
+        assert(validateSql("INSERT INTO stock_alerts (user_id, product_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE nonexistent = 'bad'", target).length > 0);
     });
     await test('độ dài tối đa code cho phép nhập ≤ độ rộng cột trong database (tránh lỗi "Data too long" của MySQL strict)', () => {
         const width = (t, c) => Number(/varchar\((\d+)\)/.exec(target.tables[t].columns.find((x) => x.name === c).type)[1]);
@@ -98,7 +100,7 @@ const capture = (fn) => H.capture(fn);
         assert.deepStrictEqual(OrderStatus.ORDER_STATUSES.filter((s) => !have.includes(s)).sort(), ['completed', 'shipped']);
         const issues = Schema.classify(Schema.diff(legacy, target));
         const by = (lv) => issues.filter((i) => i.level === lv);
-        assert.strictEqual(by('critical').length, 18); assert(by('critical').some((i) => /orders\.status.*shipped.*completed/.test(i.message)));
+        assert.strictEqual(by('critical').length, 20); assert(by('critical').some((i) => /orders\.status.*shipped.*completed/.test(i.message)));
         assert.deepStrictEqual(by('warning').map((i) => i.op.table).sort(), ['coupons', 'email_otps', 'orders', 'orders', 'product_reviews', 'products', 'products', 'products', 'products', 'products', 'shop_settings', 'support_conversations', 'support_messages']);
         assert.strictEqual(by('info').length, 10);
         assert.deepStrictEqual(Schema.classify(Schema.diff(target, target)), []);
@@ -106,7 +108,7 @@ const capture = (fn) => H.capture(fn);
     await test('kế hoạch nâng cấp: đúng các bước, đúng thứ tự, KHÔNG có lệnh xóa; mọi lệnh thuộc dạng đã biết', () => {
         const plan = Schema.diff(legacy, target); const kinds = plan.ops.map((o) => o.kind);
         assert.deepStrictEqual(plan.warnings, []);
-        assert.strictEqual(kinds.filter((k) => k === 'create-table').length, 16); assert.strictEqual(kinds.filter((k) => k === 'add-index').length, 10);
+        assert.strictEqual(kinds.filter((k) => k === 'create-table').length, 18); assert.strictEqual(kinds.filter((k) => k === 'add-index').length, 10);
         assert(kinds.indexOf('enum-widen') < kinds.indexOf('map-values') && kinds.indexOf('map-values') < kinds.indexOf('guard') && kinds.indexOf('guard') < kinds.indexOf('enum-set'), 'mở rộng → đổi dữ liệu → kiểm tra → thu hẹp');
         assert(kinds.indexOf('create-table') < kinds.indexOf('enum-widen'));
         for (const op of plan.ops) assert(!/^\s*(DROP|DELETE\s+FROM|TRUNCATE|RENAME)\b/i.test(op.sql) && !/\bALTER TABLE\s+\S+\s+(DROP|RENAME)\b/i.test(op.sql), `lệnh nguy hiểm: ${op.sql}`); // ("ON DELETE SET NULL" trong khóa ngoại là hợp lệ)
@@ -168,9 +170,9 @@ const capture = (fn) => H.capture(fn);
     await test('xem trước (mặc định) KHÔNG thay đổi gì; --apply thực hiện; chạy lần hai báo đã khớp', async () => {
         const sim = createSim(legacy, ORDER_ROWS()); const out = []; const log = (l) => out.push(l);
         let r = await Migrate.run({ db: sim, args: [], log, target, dbName: 'shopdb' });
-        assert.strictEqual(r.dryRun, true); assert.strictEqual(sim.state.log.length, 0, 'xem trước không chạy lệnh nào'); assert(/Cần 49 bước/.test(out.join('\n')) && /migrate-db -- --apply/.test(out.join('\n')) && /mysqldump/.test(out.join('\n')) && /"shopdb"/.test(out.join('\n')));
+        assert.strictEqual(r.dryRun, true); assert.strictEqual(sim.state.log.length, 0, 'xem trước không chạy lệnh nào'); assert(/Cần 51 bước/.test(out.join('\n')) && /migrate-db -- --apply/.test(out.join('\n')) && /mysqldump/.test(out.join('\n')) && /"shopdb"/.test(out.join('\n')));
         assert.deepStrictEqual(sim.state.rows.orders.map((x) => x.status), ['pending', 'confirmed', 'shipping', 'delivered', 'cancelled', 'shipping'], 'dữ liệu chưa bị đụng');
-        out.length = 0; r = await Migrate.run({ db: sim, args: ['--apply'], log, target }); assert.strictEqual(r.ok, true); assert.strictEqual(r.applied, 49); assert(/Xong \(49 bước\)/.test(out.join('\n')));
+        out.length = 0; r = await Migrate.run({ db: sim, args: ['--apply'], log, target }); assert.strictEqual(r.ok, true); assert.strictEqual(r.applied, 51); assert(/Xong \(51 bước\)/.test(out.join('\n')));
         out.length = 0; r = await Migrate.run({ db: sim, args: ['--apply'], log, target }); assert.strictEqual(r.applied, 0); assert(/đã khớp với code/.test(out.join('\n')));
     });
     await test('lỗi giữa chừng: báo rõ, các bước trước còn nguyên, chạy lại thì tiếp tục từ chỗ dở', async () => {

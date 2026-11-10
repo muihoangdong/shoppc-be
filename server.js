@@ -39,6 +39,7 @@ async function shutdown(signal) {
     try {
         hub.closeAll(); // SSE là kết nối mở lâu: phải đóng thì server.close() mới xong
         supportService.shutdown();
+        await require('./src/services/stockAlertWorker').stop();
         if (server) await new Promise((resolve) => server.close(resolve));
         await closePool();
         console.log('Đã tắt server.');
@@ -94,6 +95,7 @@ const startServer = async () => {
     server.requestTimeout = 0;
     server.headersTimeout = 65 * 1000;
     server.keepAliveTimeout = 61 * 1000;
+    require('./src/services/stockAlertWorker').start();
 };
 
 startServer();

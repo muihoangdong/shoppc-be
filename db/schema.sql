@@ -399,6 +399,7 @@ CREATE TABLE IF NOT EXISTS `warranty_tickets` (
   `id` int NOT NULL AUTO_INCREMENT,
   `ticket_code` varchar(50) NOT NULL,
   `serial_id` int NOT NULL,
+  `order_item_id` int DEFAULT NULL,
   `customer_name` varchar(150) NOT NULL,
   `phone` varchar(30) DEFAULT NULL,
   `issue` text NOT NULL,
@@ -412,8 +413,10 @@ CREATE TABLE IF NOT EXISTS `warranty_tickets` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_warranty_code` (`ticket_code`),
   KEY `idx_warranty_serial` (`serial_id`),
+  KEY `idx_warranty_order_item` (`order_item_id`),
   KEY `idx_warranty_status` (`status`,`created_at`),
-  CONSTRAINT `fk_warranty_serial` FOREIGN KEY (`serial_id`) REFERENCES `product_serials` (`id`)
+  CONSTRAINT `fk_warranty_serial` FOREIGN KEY (`serial_id`) REFERENCES `product_serials` (`id`),
+  CONSTRAINT `fk_warranty_order_item` FOREIGN KEY (`order_item_id`) REFERENCES `order_items` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS `return_requests` (
@@ -457,4 +460,30 @@ CREATE TABLE IF NOT EXISTS `audit_logs` (
   KEY `idx_audit_created` (`created_at`),
   KEY `idx_audit_actor` (`actor_id`),
   KEY `idx_audit_entity` (`entity_type`,`entity_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `wishlists` (
+  `user_id` int NOT NULL,
+  `product_id` int NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`user_id`,`product_id`),
+  KEY `idx_wishlists_product` (`product_id`),
+  CONSTRAINT `fk_wishlists_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_wishlists_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `stock_alerts` (
+  `user_id` int NOT NULL,
+  `product_id` int NOT NULL,
+  `status` enum('pending','notified','cancelled') NOT NULL DEFAULT 'pending',
+  `attempts` int NOT NULL DEFAULT '0',
+  `next_attempt_at` datetime DEFAULT NULL,
+  `notified_at` datetime DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`user_id`,`product_id`),
+  KEY `idx_stock_alerts_product` (`product_id`),
+  KEY `idx_stock_alerts_queue` (`status`,`next_attempt_at`),
+  CONSTRAINT `fk_stock_alerts_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_stock_alerts_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -183,4 +183,16 @@ const sendPaymentReceivedToCustomer = (order) => sendNotice({
     ].join('\n'),
 });
 
-module.exports = { sendPasswordReset, sendRegisterOtp, sendEmailChangeOtp, sendPaymentClaimToShop, sendPaymentReceivedToCustomer, isConfigured };
+const sendRestockNotice = ({ email, name, product_id, product_name }) => sendNotice({
+    to: email,
+    subject: `Shoppc: ${product_name} đã có hàng trở lại`,
+    text: [
+        `Chào ${name || 'bạn'},`, '',
+        `Sản phẩm bạn đăng ký theo dõi đã có hàng: ${product_name}.`,
+        `${(process.env.FRONTEND_URL || 'http://localhost:3001').replace(/\/$/, '')}/products/${product_id}`,
+        '', 'Tồn kho có thể thay đổi khi bạn đặt hàng. Email này không giữ hàng hoặc cam kết giá.',
+        `Quản lý thông báo: ${(process.env.FRONTEND_URL || 'http://localhost:3001').replace(/\/$/, '')}/account/stock-alerts`
+    ].join('\n')
+});
+
+module.exports = { sendPasswordReset, sendRegisterOtp, sendEmailChangeOtp, sendPaymentClaimToShop, sendPaymentReceivedToCustomer, sendRestockNotice, isConfigured };

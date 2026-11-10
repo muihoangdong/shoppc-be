@@ -79,8 +79,8 @@ async function createWarranty(b, actor) {
         const item = await one(client, 'SELECT o.* FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id = ?', [serial.order_item_id]);
         if (!['delivered', 'completed'].includes(item.status)) fail('Đơn bán phải đã giao hoặc hoàn tất trước khi tiếp nhận bảo hành');
         const covered = !!serial.warranty_expires_at && new Date(serial.warranty_expires_at).getTime() >= Date.now();
-        const [result] = await client.query('INSERT INTO warranty_tickets (ticket_code, serial_id, customer_name, phone, issue, covered_by_warranty, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [code('BH'), serial.id, text(b.customer_name || item.customer_name, 'Khách hàng', 150, true), text(b.phone || item.customer_phone, 'Điện thoại', 30), issue, covered, actor.id]);
+        const [result] = await client.query('INSERT INTO warranty_tickets (ticket_code, serial_id, order_item_id, customer_name, phone, issue, covered_by_warranty, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [code('BH'), serial.id, serial.order_item_id, text(b.customer_name || item.customer_name, 'Khách hàng', 150, true), text(b.phone || item.customer_phone, 'Điện thoại', 30), issue, covered, actor.id]);
         await client.query("UPDATE product_serials SET status = 'repair' WHERE id = ?", [serial.id]);
         return { id: result.insertId, summary: `Tiếp nhận bảo hành ${serial.serial_number}${covered ? '' : ' (ngoài hạn)'}`, changes: { serial_id: serial.id, covered_by_warranty: covered } };
     });

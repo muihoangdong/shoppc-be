@@ -105,6 +105,7 @@ app.use('/api/builder', builderRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/reviews', reviewRoutes);
+app.use('/api/customer', require('./routes/customerRoutes'));
 
 // 404 handler cho routes không tồn tại
 app.use((req, res) => {
