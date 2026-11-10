@@ -6,6 +6,8 @@ const Events = require('../realtime/events');
 
 const { PART_KEYS, parseBuildSpecs } = require('../config/pcParts');
 const { parseModel3d } = require('../config/product3d');
+const { parseProductImages } = require('../config/productImages');
+const ops = require('../services/operationsCommon');
 
 const CATEGORY_TYPES = ['pc', 'component', 'peripheral'];
 
@@ -19,6 +21,12 @@ function parseProduct(body, { partial }) {
         category_id: v.int(b.category_id, 'Danh mục', { min: 1, optional: partial }),
         description: v.str(b.description, 'Mô tả', { max: 5000, optional: true, allowEmpty: true }),
         image_url: v.imageUrl(b.image_url),
+        image_urls: parseProductImages(b.image_urls, v.fail),
+        sku: b.sku === undefined ? undefined : (b.sku === null || b.sku === '' ? null : v.str(b.sku, 'SKU', { max: 100 }).toUpperCase()),
+        brand_id: b.brand_id === undefined ? undefined : (b.brand_id ? v.idParam(b.brand_id, 'Thương hiệu') : null),
+        spec_template_id: b.spec_template_id === undefined ? undefined : (b.spec_template_id ? v.idParam(b.spec_template_id, 'Mẫu thông số') : null),
+        warranty_months: b.warranty_months === undefined ? undefined : v.int(b.warranty_months, 'Tháng bảo hành', { min: 0, max: 120 }),
+        serial_required: b.serial_required === undefined ? undefined : ops.bool(b.serial_required),
         specs: v.specs(b.specs),
         // Build PC: loại linh kiện ('' / null = không phải linh kiện) + thông số kiểm tra tương thích
         part_type: b.part_type === undefined ? undefined : (b.part_type === '' || b.part_type === null ? null : v.oneOf(b.part_type, 'Loại linh kiện', PART_KEYS)),
@@ -27,6 +35,8 @@ function parseProduct(body, { partial }) {
         original_price: b.original_price === undefined ? undefined : (b.original_price === null || b.original_price === '' ? null : v.int(b.original_price, 'Giá gốc', { min: 0, max: 1e12 })),
         model_3d: parseModel3d(b.model_3d, v.fail)
     };
+    if (out.sku && !/^[A-Z0-9._-]+$/.test(out.sku)) v.fail('SKU chỉ gồm chữ, số, dấu chấm, gạch ngang và gạch dưới');
+    if (out.image_urls !== undefined) out.image_url = out.image_urls[0] || '';
     if (out.part_type === null) out.build_specs = null;
     else if (out.part_type) out.build_specs = parseBuildSpecs(out.part_type, b.build_specs, v.fail);
     else if (b.build_specs !== undefined) out.build_specs = undefined; // thông số không đi kèm loại: xử lý ở updateProduct
@@ -87,7 +97,7 @@ class ProductController {
         try {
             const data = parseProduct(req.body, { partial: false });
             await ensureCategory(data.category_id);
-            const id = await ProductModel.createProduct(data);
+            const id = await ProductModel.createProduct(data, req.user);
             Events.productChanged([id]);
             const product = await ProductModel.getProductById(id);
             res.status(201).json({ success: true, message: 'Tạo sản phẩm thành công', data: product });
@@ -109,7 +119,7 @@ class ProductController {
                 data.build_specs = parseBuildSpecs(current.part_type, body.build_specs, v.fail);
             }
             await ensureCategory(data.category_id);
-            const affectedRows = await ProductModel.updateProduct(id, data);
+            const affectedRows = await ProductModel.updateProduct(id, data, req.user);
             if (affectedRows === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
             Events.productChanged([id]);
             const product = await ProductModel.getProductById(id);
@@ -123,7 +133,7 @@ class ProductController {
         try {
             const id = v.idParam(req.params.id);
             const quantity = v.int((req.body || {}).quantity, 'Số lượng tồn kho', { min: 0, max: 1e7 });
-            const affectedRows = await ProductModel.setStock(id, quantity);
+            const affectedRows = await ProductModel.setStock(id, quantity, req.user);
             if (affectedRows === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
             Events.productChanged([id]);
             const product = await ProductModel.getProductById(id);

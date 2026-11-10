@@ -67,6 +67,7 @@ const startServer = async () => {
 
     try {
         await runStartupChecks();
+        await require('./src/services/operationsLedger').initialize();
     } catch (error) {
         console.error(`❌ Cannot start server: ${error.message}`);
         process.exit(1);

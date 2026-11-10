@@ -30,11 +30,14 @@
     "test:schema": "node tests/schema.test.js",
     "test:product3d": "node tests/product3d.test.js",
     "test:uploads": "node tests/uploads.test.js",
-    "test": "node tests/chatbot.test.js && node tests/security.test.js && node tests/roles.test.js && node tests/orders.test.js && node tests/catalog.test.js && node tests/realtime.test.js && node tests/support.test.js && node tests/ai.test.js && node tests/provider.test.js && node tests/aiconnect.test.js && node tests/gemini.test.js && node tests/otp.test.js && node tests/builder.test.js && node tests/payments.test.js && node tests/coupons.test.js && node tests/reviews.test.js && node tests/my-orders.test.js && node tests/schema.test.js && node tests/product3d.test.js",
+    "test:product-images": "node tests/product-images.test.js",
+    "test": "node tests/chatbot.test.js && node tests/security.test.js && node tests/roles.test.js && node tests/orders.test.js && node tests/catalog.test.js && node tests/realtime.test.js && node tests/support.test.js && node tests/ai.test.js && node tests/provider.test.js && node tests/aiconnect.test.js && node tests/gemini.test.js && node tests/otp.test.js && node tests/builder.test.js && node tests/payments.test.js && node tests/coupons.test.js && node tests/reviews.test.js && node tests/my-orders.test.js && node tests/schema.test.js && node tests/product3d.test.js && node tests/product-images.test.js && node tests/operations.test.js",
     "fix-roles": "node scripts/fix-roles.js",
     "create-admin": "node scripts/create-admin.js",
     "ai:check": "node scripts/ai-check.js",
-    "migrate-db": "node scripts/migrate-db.js"
+    "migrate-db": "node scripts/migrate-db.js",
+    "test:operations": "node tests/operations.test.js",
+    "test:operations:integration": "node tests/operations.integration.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

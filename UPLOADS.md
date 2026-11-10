@@ -1,10 +1,10 @@
 # Upload ảnh và mô hình sản phẩm
 
-Form sản phẩm admin có nút tải từ máy tính, tự điền URL ảnh hoặc mô hình vào các trường hiện có. Bấm **Lưu sản phẩm** để áp dụng. Có thể tải một GLB/GLTF và một USDZ cùng lúc. Thay ảnh/mô hình không tự xóa file cũ vì file có thể còn được tham chiếu ở sản phẩm khác.
+Form sản phẩm admin có nút tải từ máy tính, tự điền URL ảnh hoặc mô hình vào các trường hiện có. Bấm **Lưu sản phẩm** để áp dụng. Có thể chọn nhiều ảnh cùng lúc (tối đa 20 ảnh/sản phẩm), sắp xếp và chọn ảnh chính; hoặc tải một GLB/GLTF và một USDZ cùng lúc. Thay ảnh/mô hình không tự xóa file cũ vì file có thể còn được tham chiếu ở sản phẩm khác.
 
 ## Lưu trữ khi deploy
 
-File lưu tại `uploads/products` của backend, hoặc thư mục tuyệt đối cấu hình bằng `UPLOAD_DIR`. Thư mục này đã được Git bỏ qua. Không cần đổi database.
+File lưu tại `uploads/products` của backend, hoặc thư mục tuyệt đối cấu hình bằng `UPLOAD_DIR`. Thư mục này đã được Git bỏ qua. Thư viện ảnh dùng cột JSON `products.image_urls`; `image_url` vẫn là ảnh chính để tương thích giỏ hàng/thẻ sản phẩm. Chạy `npm run migrate-db -- --apply` khi deploy nếu không bật `AUTO_MIGRATE`.
 
 **Server production cần ổ đĩa bền vững/persistent disk** (ví dụ mount `/var/data/uploads` rồi đặt `UPLOAD_DIR=/var/data/uploads`). Ổ tạm của dịch vụ hosting có thể mất file khi khởi động lại hoặc deploy. Nhiều instance cần dùng chung thư mục lưu trữ hoặc thay bằng object storage.
 
@@ -14,7 +14,7 @@ URL ảnh/mô hình được admin chuyển thành URL đầy đủ của API. C
 
 - `POST /api/uploads/image?filename=ten.png`: PNG/JPG/JPEG/WEBP, tối đa 10 MiB.
 - `POST /api/uploads/model?filename=ten.glb`: GLB/GLTF/USDZ, tối đa 50 MiB.
-- Body là bytes file (`Content-Type: application/octet-stream`); `Authorization: Bearer ...` bắt buộc, quyền admin hoặc staff. Giới hạn 20 request upload/phút/IP.
+- Body là bytes file (`Content-Type: application/octet-stream`); `Authorization: Bearer ...` bắt buộc, quyền admin hoặc staff. Giới hạn 40 request upload/phút/IP.
 - Thành công: HTTP 201, `{ "success": true, "data": { "url": "/api/uploads/files/UUID.glb", "filename": "ten.glb", "size": 123, "type": "glb" } }`.
 - `GET /api/uploads/files/UUID.ext`: công khai, MIME theo định dạng; hỗ trợ HTTP Range. Tên do server tạo, không dùng tên người dùng làm đường dẫn.
 - Lỗi: 400 file rỗng/sai nội dung/định dạng; 401 chưa đăng nhập; 403 không đủ quyền; 413 quá lớn; 429 quá nhiều request.

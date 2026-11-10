@@ -21,7 +21,7 @@ function createUploadRouter({ authenticate, authorizeStaff, directory = UPLOAD_D
             if (err && !res.headersSent) res.status(err.status === 404 ? 404 : 500).type('application/json').json({ success: false, message: 'Không tải được file' });
         });
     });
-    const limiter = rateLimit({ windowMs: 60 * 1000, max: 20, message: 'Bạn tải quá nhiều file. Vui lòng thử lại sau một phút.' });
+    const limiter = rateLimit({ windowMs: 60 * 1000, max: 40, message: 'Bạn tải quá nhiều file. Vui lòng thử lại sau một phút.' });
     for (const kind of ['image', 'model']) {
         router.post(`/${kind}`, authenticate, authorizeStaff, limiter,
             express.raw({ type: 'application/octet-stream', limit: kind === 'image' ? IMAGE_LIMIT : MODEL_LIMIT, inflate: false }),

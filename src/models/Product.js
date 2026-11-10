@@ -1,4 +1,5 @@
 const db = require('../config/database');
+const ledger = require('../services/operationsLedger');
 
 class Product {
     static normalizeProduct(row) {
@@ -17,6 +18,7 @@ class Product {
         return {
             ...row,
             specs: parse(row.specs) || {},
+            image_urls: Array.isArray(parse(row.image_urls)) ? parse(row.image_urls) : [],
             ...(row.build_specs !== undefined ? { build_specs: parse(row.build_specs) || null } : {}),
             ...(row.model_3d !== undefined ? { model_3d: parse(row.model_3d) || null } : {})
         };
@@ -169,7 +171,7 @@ class Product {
         return rows.map(this.normalizeProduct);
     }
 
-    static async createProduct(productData) {
+    static async createProduct(productData, actor = null) {
         const {
             name,
             description = null,
@@ -181,15 +183,25 @@ class Product {
             part_type = null,
             build_specs = null,
             original_price = null,
-            model_3d = null
+            model_3d = null,
+            image_urls = [],
+            sku = null, brand_id = null, spec_template_id = null, warranty_months = 12, serial_required = false
         } = productData;
 
-        const [result] = await db.pool.query(
+        if (ledger.isReady()) {
+            await require('../services/operationsCatalog').validateProductMetadata(db.pool, productData);
+            if (serial_required && Number(stock) > 0) require('../services/operationsCommon').fail('Hàng theo serial phải tạo với tồn 0, sau đó nhập kho kèm serial');
+        }
+
+        const client = ledger.isReady() ? await db.getClient() : db.pool;
+        try {
+        if (ledger.isReady()) await client.beginTransaction();
+        const [result] = await client.query(
             `INSERT INTO products (
                 name, description, price, stock,
                 category_id, image_url, specs, part_type, build_specs,
-                original_price, model_3d
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                original_price, model_3d, image_urls, sku, brand_id, spec_template_id, warranty_months, serial_required
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 name,
                 description,
@@ -201,14 +213,25 @@ class Product {
                 part_type || null,
                 build_specs ? JSON.stringify(build_specs) : null,
                 original_price || null,
-                model_3d ? JSON.stringify(model_3d) : null
+                model_3d ? JSON.stringify(model_3d) : null,
+                JSON.stringify(image_urls), sku, brand_id, spec_template_id, warranty_months, serial_required
             ]
         );
 
+        if (ledger.isReady()) {
+            await ledger.movement(client, result.insertId, Number(stock), 'opening', 'product', result.insertId, actor?.id, 'Tồn ban đầu khi tạo sản phẩm');
+            await ledger.audit(client, actor, 'product.create', 'product', result.insertId, `Tạo sản phẩm ${name}`, { sku, name, price, stock, category_id, brand_id, warranty_months, serial_required });
+            await client.commit();
+        }
         return result.insertId;
+        } catch (err) {
+            if (ledger.isReady()) await client.rollback();
+            if (err.code === 'ER_DUP_ENTRY') require('../services/operationsCommon').fail('SKU đã được sử dụng', 409);
+            throw err;
+        } finally { if (ledger.isReady()) client.release(); }
     }
 
-    static async updateProduct(id, productData) {
+    static async updateProduct(id, productData, actor = null) {
         const allowed = [
             'name',
             'description',
@@ -220,7 +243,8 @@ class Product {
             'part_type',
             'build_specs',
             'original_price',
-            'model_3d'
+            'model_3d',
+            'image_urls', 'sku', 'brand_id', 'spec_template_id', 'warranty_months', 'serial_required'
         ];
 
         const entries = Object.entries(productData)
@@ -232,11 +256,42 @@ class Product {
                 if (key === 'build_specs') return [key, value ? JSON.stringify(value) : null];
                 if (key === 'part_type') return [key, value || null];
                 if (key === 'model_3d') return [key, value ? JSON.stringify(value) : null];
+                if (key === 'image_urls') return [key, JSON.stringify(value || [])];
                 if (key === 'original_price') return [key, value || null];
                 return [key, value];
             });
 
         if (entries.length === 0) return 0;
+
+        if (ledger.isReady()) {
+            const client = await db.getClient();
+            try {
+                await client.beginTransaction();
+                const [rows] = await client.query('SELECT * FROM products WHERE id = ? FOR UPDATE', [id]);
+                if (!rows[0]) { await client.rollback(); return 0; }
+                const before = rows[0];
+                const merged = { ...before, ...productData };
+                await require('../services/operationsCatalog').validateProductMetadata(client, merged);
+                const delta = productData.stock === undefined ? 0 : Number(productData.stock) - Number(before.stock);
+                if (delta && (Number(before.serial_required) || Number(merged.serial_required))) require('../services/operationsCommon').fail('Hàng theo serial: dùng phiếu nhập hoặc thu hồi serial để thay đổi tồn');
+                if (delta) {
+                    const [count] = await client.query('SELECT COUNT(*) AS total FROM product_serials WHERE product_id = ?', [id]);
+                    if (Number(count[0].total)) require('../services/operationsCommon').fail('Sản phẩm đã có serial: dùng phiếu nhập hoặc thu hồi serial');
+                }
+                if (productData.serial_required !== undefined && Number(before.serial_required) !== Number(productData.serial_required)) {
+                    const [count] = await client.query('SELECT COUNT(*) AS total FROM product_serials WHERE product_id = ?', [id]);
+                    if (Number(count[0].total)) require('../services/operationsCommon').fail('Không đổi chế độ serial của sản phẩm đã có serial');
+                }
+                const [result] = await client.query(`UPDATE products SET ${entries.map(([key]) => `${key} = ?`).join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [...entries.map(([, value]) => value), id]);
+                if (delta) await ledger.movement(client, id, delta, 'adjustment', 'product', id, actor?.id, 'Điều chỉnh tồn khi sửa sản phẩm');
+                await ledger.audit(client, actor, 'product.update', 'product', id, `Cập nhật ${merged.name}`, {
+                    before: Object.fromEntries(Object.keys(productData).map((k) => [k, before[k]])), after: productData
+                });
+                await client.commit();
+                return result.affectedRows;
+            } catch (err) { await client.rollback(); if (err.code === 'ER_DUP_ENTRY') require('../services/operationsCommon').fail('SKU đã được sử dụng', 409); throw err; }
+            finally { client.release(); }
+        }
 
         const setClause = entries
             .map(([key]) => `${key} = ?`)
@@ -257,7 +312,8 @@ class Product {
         return result.affectedRows;
     }
 
-    static async setStock(id, stock) {
+    static async setStock(id, stock, actor = null) {
+        if (ledger.isReady()) { await require('../services/operationsInventory').adjustStock(id, stock, actor, 'Điều chỉnh tồn kho từ quản trị'); return 1; }
         const [result] = await db.pool.query(
             `UPDATE products
              SET stock = ?,

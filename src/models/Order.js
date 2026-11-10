@@ -14,6 +14,7 @@ const { computeShippingFee } = require('../config/shipping');
 const { getTopProducts, resolveRange, todayYmd, addDays } = require('../services/analytics');
 const Coupons = require('../services/coupons');
 const CouponModel = require('./Coupon');
+const operationsLedger = require('../services/operationsLedger');
 
 /** Lỗi nghiệp vụ có mã HTTP; `expose` = thông báo an toàn để hiển thị cho người dùng. */
 class OrderError extends Error {
@@ -180,6 +181,7 @@ class OrderModel {
                         `Không thể cập nhật tồn kho cho ${item.name}`
                     );
                 }
+                await operationsLedger.orderMovement(client, item.product_id, -Number(item.quantity), 'sale', orderId, user_id);
             }
 
             // Ghi lịch sử trạng thái
@@ -309,6 +311,7 @@ static async updateOrderStatus(id, newStatus, changedBy = null, note = null) {
         }
 
         // Hủy đơn => hoàn lại tồn kho (tồn kho đã bị trừ lúc đặt hàng)
+        await operationsLedger.orderStatus(client, id, newStatus, changedBy);
         if (newStatus === 'cancelled') {
             const [items] = await client.query(
                 'SELECT product_id, quantity FROM order_items WHERE order_id = ?',
@@ -320,8 +323,10 @@ static async updateOrderStatus(id, newStatus, changedBy = null, note = null) {
                         'UPDATE products SET stock = stock + ? WHERE id = ?',
                         [item.quantity, item.product_id]
                     );
+                    await operationsLedger.orderMovement(client, item.product_id, Number(item.quantity), 'cancel', id, changedBy);
                 }
             }
+            await operationsLedger.cancelSerials(client, id);
             // ... và trả lại lượt dùng mã giảm giá
             if (order.coupon_code) {
                 await client.query(

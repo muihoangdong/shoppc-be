@@ -633,11 +633,16 @@ const writeTools = [
             const verb = p.mode === 'set' ? 'Đặt tồn kho' : p.quantity >= 0 ? `Nhập thêm ${p.quantity}` : `Trừ ${Math.abs(p.quantity)}`;
             return `${verb} cho #${cur.id} "${cur.name}"\n- Tồn kho: ${cur.stock} → ${next}`;
         },
-        async run(p) {
+        async run(p, ctx) {
             const cur = await mustGetProduct(p.id);
             if (p.mode === 'set') {
-                await Product.setStock(p.id, p.quantity);
+                await Product.setStock(p.id, p.quantity, ctx?.user);
                 return { message: `Đã đặt tồn kho "${cur.name}" = ${p.quantity}` };
+            }
+            if (require('../operationsLedger').isReady()) {
+                await require('../operationsInventory').adjustStock(p.id, p.quantity, ctx?.user, 'Điều chỉnh qua AI Copilot', true);
+                const after = await mustGetProduct(p.id);
+                return { message: `Đã cập nhật tồn kho "${cur.name}": ${cur.stock} → ${after.stock}` };
             }
             const [r] =
                 p.quantity >= 0

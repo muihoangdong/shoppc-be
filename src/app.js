@@ -22,6 +22,8 @@ const reviewRoutes = require('./routes/reviewRoutes');
 const { hub } = require('./realtime/hub');
 const createUploadRouter = require('./routes/uploadRoutes');
 const { authenticate, authorizeStaff } = require('./middlewares/auth');
+const operationsLedger = require('./services/operationsLedger');
+const operationsRoutes = require('./routes/operationsRoutes');
 
 const app = express();
 
@@ -38,6 +40,8 @@ app.use(requestLog);
 app.use(securityHeaders);
 app.use(corsMiddleware());
 app.use(hideServerErrors);
+app.use(operationsLedger.middleware);
+app.use('/api/operations', operationsRoutes);
 app.use('/api/uploads', createUploadRouter({ authenticate, authorizeStaff }));
 app.use(bodyParser.json({ limit: '100kb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '100kb' }));

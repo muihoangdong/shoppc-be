@@ -49,6 +49,29 @@ CREATE TABLE IF NOT EXISTS `categories` (
   CONSTRAINT `categories_ibfk_1` FOREIGN KEY (`parent_id`) REFERENCES `categories` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS `brands` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(150) NOT NULL,
+  `website` varchar(255) DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_brands_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `spec_templates` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(150) NOT NULL,
+  `category_id` int NOT NULL,
+  `fields` json NOT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_templates_category` (`category_id`),
+  CONSTRAINT `fk_templates_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS `products` (
   `id` int NOT NULL AUTO_INCREMENT,
   `name` varchar(255) NOT NULL,
@@ -64,7 +87,18 @@ CREATE TABLE IF NOT EXISTS `products` (
   `build_specs` json DEFAULT NULL,
   `original_price` decimal(15,2) DEFAULT NULL,
   `model_3d` json DEFAULT NULL,
+  `image_urls` json DEFAULT NULL,
+  `sku` varchar(100) DEFAULT NULL,
+  `brand_id` int DEFAULT NULL,
+  `spec_template_id` int DEFAULT NULL,
+  `warranty_months` int NOT NULL DEFAULT '12',
+  `serial_required` tinyint(1) NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_products_sku` (`sku`),
+  KEY `idx_products_brand` (`brand_id`),
+  KEY `idx_products_template` (`spec_template_id`),
+  CONSTRAINT `fk_products_brand` FOREIGN KEY (`brand_id`) REFERENCES `brands` (`id`),
+  CONSTRAINT `fk_products_template` FOREIGN KEY (`spec_template_id`) REFERENCES `spec_templates` (`id`),
   KEY `category_id` (`category_id`),
   CONSTRAINT `products_ibfk_1` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`),
   KEY `idx_products_stock` (`stock`),
@@ -272,4 +306,155 @@ CREATE TABLE IF NOT EXISTS `shop_settings` (
   `setting_value` text,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `suppliers` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `code` varchar(50) NOT NULL,
+  `name` varchar(150) NOT NULL,
+  `contact_name` varchar(150) DEFAULT NULL,
+  `phone` varchar(30) DEFAULT NULL,
+  `email` varchar(150) DEFAULT NULL,
+  `address` varchar(255) DEFAULT NULL,
+  `tax_code` varchar(50) DEFAULT NULL,
+  `notes` text,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_suppliers_code` (`code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `purchase_receipts` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `receipt_code` varchar(50) NOT NULL,
+  `supplier_id` int NOT NULL,
+  `status` enum('draft','received','cancelled') NOT NULL DEFAULT 'draft',
+  `note` text,
+  `received_at` datetime DEFAULT NULL,
+  `created_by` int DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_receipts_code` (`receipt_code`),
+  KEY `idx_receipts_supplier` (`supplier_id`),
+  KEY `idx_receipts_status` (`status`,`created_at`),
+  CONSTRAINT `fk_receipts_supplier` FOREIGN KEY (`supplier_id`) REFERENCES `suppliers` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `purchase_receipt_items` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `receipt_id` int NOT NULL,
+  `product_id` int NOT NULL,
+  `quantity` int NOT NULL,
+  `unit_cost` decimal(15,2) NOT NULL,
+  `serial_numbers` json DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_receipt_items_receipt` (`receipt_id`),
+  KEY `idx_receipt_items_product` (`product_id`),
+  CONSTRAINT `fk_receipt_items_receipt` FOREIGN KEY (`receipt_id`) REFERENCES `purchase_receipts` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_receipt_items_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `inventory_movements` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `product_id` int NOT NULL,
+  `kind` varchar(30) NOT NULL,
+  `quantity` int NOT NULL,
+  `before_stock` int NOT NULL,
+  `after_stock` int NOT NULL,
+  `reference_type` varchar(40) DEFAULT NULL,
+  `reference_id` varchar(100) DEFAULT NULL,
+  `actor_id` int DEFAULT NULL,
+  `reason` varchar(500) DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_movements_product` (`product_id`,`id`),
+  KEY `idx_movements_created` (`created_at`),
+  CONSTRAINT `fk_movements_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `product_serials` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `product_id` int NOT NULL,
+  `serial_number` varchar(150) NOT NULL,
+  `receipt_id` int DEFAULT NULL,
+  `order_item_id` int DEFAULT NULL,
+  `status` enum('in_stock','sold','returned','repair','retired') NOT NULL DEFAULT 'in_stock',
+  `sold_at` datetime DEFAULT NULL,
+  `warranty_expires_at` datetime DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_serial_number` (`serial_number`),
+  KEY `idx_serial_product` (`product_id`,`status`),
+  KEY `idx_serial_order_item` (`order_item_id`),
+  KEY `idx_serial_receipt` (`receipt_id`),
+  CONSTRAINT `fk_serial_product` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`),
+  CONSTRAINT `fk_serial_receipt` FOREIGN KEY (`receipt_id`) REFERENCES `purchase_receipts` (`id`),
+  CONSTRAINT `fk_serial_order_item` FOREIGN KEY (`order_item_id`) REFERENCES `order_items` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `warranty_tickets` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `ticket_code` varchar(50) NOT NULL,
+  `serial_id` int NOT NULL,
+  `customer_name` varchar(150) NOT NULL,
+  `phone` varchar(30) DEFAULT NULL,
+  `issue` text NOT NULL,
+  `status` enum('received','diagnosing','repairing','resolved','rejected') NOT NULL DEFAULT 'received',
+  `covered_by_warranty` tinyint(1) NOT NULL DEFAULT '0',
+  `resolution` text,
+  `created_by` int DEFAULT NULL,
+  `completed_at` datetime DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_warranty_code` (`ticket_code`),
+  KEY `idx_warranty_serial` (`serial_id`),
+  KEY `idx_warranty_status` (`status`,`created_at`),
+  CONSTRAINT `fk_warranty_serial` FOREIGN KEY (`serial_id`) REFERENCES `product_serials` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `return_requests` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `return_code` varchar(50) NOT NULL,
+  `order_id` int NOT NULL,
+  `order_item_id` int NOT NULL,
+  `quantity` int NOT NULL,
+  `reason` text NOT NULL,
+  `status` enum('requested','approved','received','refunded','closed','rejected','cancelled') NOT NULL DEFAULT 'requested',
+  `refund_amount` decimal(15,2) NOT NULL DEFAULT '0.00',
+  `restock` tinyint(1) NOT NULL DEFAULT '0',
+  `serial_ids` json DEFAULT NULL,
+  `refund_reference` varchar(150) DEFAULT NULL,
+  `note` text,
+  `created_by` int DEFAULT NULL,
+  `received_at` datetime DEFAULT NULL,
+  `refunded_at` datetime DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_return_code` (`return_code`),
+  KEY `idx_returns_order` (`order_id`),
+  KEY `idx_returns_item` (`order_item_id`),
+  KEY `idx_returns_status` (`status`,`created_at`),
+  CONSTRAINT `fk_returns_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`),
+  CONSTRAINT `fk_returns_item` FOREIGN KEY (`order_item_id`) REFERENCES `order_items` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `audit_logs` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `actor_id` int DEFAULT NULL,
+  `actor_name` varchar(150) DEFAULT NULL,
+  `action` varchar(100) NOT NULL,
+  `entity_type` varchar(50) NOT NULL,
+  `entity_id` varchar(100) DEFAULT NULL,
+  `summary` varchar(500) DEFAULT NULL,
+  `changes` json DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_audit_created` (`created_at`),
+  KEY `idx_audit_actor` (`actor_id`),
+  KEY `idx_audit_entity` (`entity_type`,`entity_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
