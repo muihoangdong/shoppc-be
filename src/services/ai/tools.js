@@ -917,7 +917,41 @@ const writeTools = [
 
 // ───────────────────────── Xuất ra ─────────────────────────
 
-const allTools = [...readTools, ...writeTools];
+const imageSearch = require('./productImageSearch');
+const imageTools = [{
+    name: 'search_product_images', access: 'staff', write: false,
+    description: 'Tìm URL ảnh trên Internet cho sản phẩm thật trong cửa hàng. Tra id bằng list_products trước. Trả ảnh gợi ý kèm URL, nguồn và giấy phép; chưa sửa dữ liệu. Chỉ gửi tên/model công khai, không gửi thông tin khách hàng.',
+    input_schema: { type: 'object', properties: { product_id: { type: 'integer' }, query: { type: 'string', description: 'Tên/model công khai; bỏ trống để dùng tên sản phẩm' } }, required: ['product_id'] },
+    async run(input, ctx) {
+        const product = await mustGetProduct(pInt(input.product_id, 'ID sản phẩm', { min: 1 }));
+        const query = pStr(input.query, 'Từ khóa tên/model', { max: 200, optional: true });
+        try { return await imageSearch.search({ product, query, userId: ctx.user.id }); }
+        catch (err) { if (err instanceof imageSearch.ImageSearchError) fail(err.message); throw err; }
+    }
+}, {
+    name: 'apply_searched_product_image', access: 'staff', write: true,
+    description: 'Dùng URL ảnh đã được search_product_images trả về cho đúng sản phẩm và tài khoản trong 15 phút. Đưa URL/nguồn vào thẻ xác nhận, không chạy trước khi xác nhận. Giữ ảnh hiện có trong thư viện, đưa ảnh mới làm ảnh chính.',
+    input_schema: { type: 'object', properties: { product_id: { type: 'integer' }, image_url: { type: 'string' } }, required: ['product_id', 'image_url'] },
+    parse(input) { return { product_id: pInt(input.product_id, 'ID sản phẩm', { min: 1 }), image_url: pStr(input.image_url, 'URL ảnh đã tìm', { max: 500 }) }; },
+    async describe(p, ctx) {
+        const product = await mustGetProduct(p.product_id);
+        let result;
+        try { result = imageSearch.candidate(ctx.user.id, product.id, p.image_url); }
+        catch (err) { fail(err.message); }
+        return `Cập nhật ảnh chính #${product.id} "${product.name}"\nẢnh: ${result.url}\nNguồn: ${result.source_url}\nQuyền sử dụng: ${result.license || 'Kiểm tra trang nguồn'}\nGiữ ảnh cũ trong thư viện. Kiểm tra đúng model trước khi xác nhận.`;
+    },
+    async run(p, ctx) {
+        try { imageSearch.candidate(ctx.user.id, p.product_id, p.image_url); }
+        catch (err) { fail(err.message); }
+        const product = await mustGetProduct(p.product_id);
+        const images = [...new Set([p.image_url, product.image_url, ...(product.image_urls || [])].filter(Boolean))];
+        if (images.length > 20) fail('Thư viện đã đủ 20 ảnh. Hãy xóa bớt ảnh ở form sản phẩm trước.');
+        await Product.updateProduct(product.id, { image_url: p.image_url, image_urls: images }, ctx.user);
+        require('../../realtime/events').productChanged([product.id]);
+        return { message: `Đã cập nhật ảnh chính cho #${product.id} "${product.name}"` };
+    }
+}];
+const allTools = [...readTools, ...writeTools, ...imageTools];
 const byName = new Map(allTools.map((t) => [t.name, t]));
 
 const canUse = (tool, role) => role === 'admin' || (role === 'staff' && tool.access === 'staff');

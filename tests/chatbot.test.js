@@ -124,7 +124,7 @@ const test = async (name, fn) => {
     const a = Tools.getToolsForRole('admin').map((t) => t.name);
     assert(!s.includes('delete_product') && !s.includes('delete_category'));
     assert(a.includes('delete_product') && a.includes('delete_category'));
-    assert.strictEqual(a.length, 20); assert.strictEqual(s.length, 18);
+    assert.strictEqual(a.length, 22); assert.strictEqual(s.length, 20);
     for (const name of ['list_conversations', 'get_conversation', 'reply_to_conversation']) assert(s.includes(name), name);
     assert.strictEqual(Tools.getTool('reply_to_conversation').write, true, 'gửi tin cho khách phải cần xác nhận');
     for (const t of Tools.getToolsForRole('admin')) assert(t.input_schema && t.input_schema.type === 'object', t.name);
@@ -139,6 +139,24 @@ const test = async (name, fn) => {
   });
 
   console.log('Vòng lặp chat – đọc dữ liệu');
+  await test('tìm ảnh Internet → thẻ xác nhận → cập nhật ảnh đúng một lần, giữ ảnh cũ', async () => {
+    const oldFetch = global.fetch;
+    const oldKey = process.env.BRAVE_SEARCH_API_KEY;
+    delete process.env.BRAVE_SEARCH_API_KEY;
+    const url = 'https://upload.wikimedia.org/xps.jpg';
+    global.fetch = async (target, opts) => String(target).startsWith('https://commons.wikimedia.org/') ? Response.json({ query: { pages: { 1: { title: 'File:XPS.jpg', imageinfo: [{ mime: 'image/jpeg', url, descriptionurl: 'https://commons.wikimedia.org/wiki/File:XPS.jpg' }] } } } }) : oldFetch(target, opts);
+    try {
+      script = [toolTurn(tu('search_product_images', { product_id: 10 })), toolTurn(tu('apply_searched_product_image', { product_id: 10, image_url: url })), textTurn('Kiểm tra URL và xác nhận ảnh.')];
+      const before = log.length;
+      const r = await Chat.runChat({ messages: U('Tìm ảnh Internet cho Dell XPS 13 để thêm vào sản phẩm'), user: staff });
+      assert.strictEqual(r.pending_actions.length, 1); assert.strictEqual(log.length, before);
+      assert(r.pending_actions[0].summary.includes(url));
+      assert((await Chat.confirmActions({ ids: [r.pending_actions[0].id], user: staff }))[0].ok);
+      assert.strictEqual(log.length, before + 1);
+      assert.deepStrictEqual(data.products.find((p) => p.id === 10).image_urls, [url]);
+      assert.strictEqual((await Chat.confirmActions({ ids: [r.pending_actions[0].id], user: staff }))[0].ok, false);
+    } finally { global.fetch = oldFetch; if (oldKey === undefined) delete process.env.BRAVE_SEARCH_API_KEY; else process.env.BRAVE_SEARCH_API_KEY = oldKey; }
+  });
   await test('đọc: gọi list_products rồi trả lời; kết quả tool gửi lại cho model', async () => {
     script = [toolTurn(tu('list_products', { max_stock: 5 }, 'T1')), textTurn('Có 2 sản phẩm sắp hết.')];
     const r = await Chat.runChat({ messages: U('hàng sắp hết?'), user: staff });
