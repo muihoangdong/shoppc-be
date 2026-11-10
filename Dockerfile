@@ -10,6 +10,9 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY . .
 
+# Thư mục upload cần ghi được khi chạy bằng user node.
+RUN mkdir -p /app/uploads/products && chown -R node:node /app/uploads
+
 # Không chạy bằng root
 USER node
 
