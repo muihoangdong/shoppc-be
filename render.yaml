@@ -13,6 +13,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Áp dụng schema mới trước khi nhận request; không cần Render Shell/pre-deploy trả phí.
+      - key: AUTO_MIGRATE
+        value: "true"
       - key: NODE_VERSION
         value: "20"
       - key: TRUST_PROXY

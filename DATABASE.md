@@ -25,6 +25,17 @@ npm run migrate-db -- --apply                 # 3. thực hiện
 - Chạy lại nhiều lần không sao. Bị dừng giữa chừng thì sửa nguyên nhân rồi chạy lại, nó tiếp tục từ chỗ dở (DDL của MySQL tự commit nên không rollback được — vì vậy cần sao lưu).
 - `.env` có `AUTO_MIGRATE=true` thì server tự làm việc này mỗi lần khởi động.
 
+### Render báo thiếu bảng/cột và dừng khởi động
+
+Database local và database trên Render là hai môi trường riêng; chạy migration trên máy không nâng cấp database đang deploy.
+
+- Backend chạy trên Render (`RENDER=true`) mặc định áp dụng migration còn thiếu **trước khi mở cổng HTTP**. Blueprint `render.yaml` cũng đặt `AUTO_MIGRATE=true` rõ ràng.
+- Dịch vụ đã tạo bằng giao diện Render vẫn chỉ cần Start Command `npm start`; không cần đồng bộ Blueprint để nhận hành vi mặc định trong code mới.
+- Nếu Environment đang có `AUTO_MIGRATE=false`, đổi thành `true` rồi **Save and deploy** để nâng cấp. Giá trị `false` được giữ nguyên ý nghĩa: chỉ kiểm tra, không tự thay đổi schema.
+- Dùng **Manual Deploy → Deploy latest commit** nếu bản sửa chưa được tự deploy. Log thành công có `Đã nâng cấp xong, cấu trúc database khớp với code.` rồi `Server is running`.
+- Có thể sửa ngay mà chưa đợi code mới: thêm `AUTO_MIGRATE=true` trong Environment và Save and deploy. Cơ chế migration đã có sẵn trong các bản trước.
+- Tài khoản MySQL cần quyền CREATE/ALTER/INDEX/REFERENCES và cập nhật dữ liệu theo các bước migration. Nếu thiếu quyền, migration dừng và server chưa nhận request; sửa quyền rồi deploy lại. Sao lưu database trước khi nâng cấp; không import lại dump có DROP TABLE để xử lý lỗi thiếu bảng.
+
 ## Cách 2 — Làm lại database từ file đã dựng sẵn (dữ liệu hiện có được giữ)
 `db/shopdb-aligned.sql` là dump của bạn đã chuyển sang cấu trúc mới (đã bỏ các dòng GTID/`SQL_LOG_BIN` làm import báo lỗi 3546).
 - **MySQL Workbench**: tạo schema trống → *Server > Data Import* → *Import from Self-Contained File* → chọn file → *Default Target Schema* = schema vừa tạo → *Start Import*.

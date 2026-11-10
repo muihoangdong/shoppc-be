@@ -6,7 +6,8 @@ const Schema = require('./schema');
 
 /**
  * So cấu trúc database với db/schema.sql. Không khớp thì in hướng dẫn; ở production mà thiếu thứ quan trọng thì không khởi động
- * (tránh chạy với database sai rồi lỗi từng chút một). AUTO_MIGRATE=true: tự nâng cấp (an toàn, chỉ thêm/sửa, không xóa dữ liệu).
+ * (tránh chạy với database sai rồi lỗi từng chút một). AUTO_MIGRATE=true: tự nâng cấp (chỉ thêm/sửa, không xóa dữ liệu).
+ * Render mặc định tự nâng cấp trước khi mở HTTP; AUTO_MIGRATE=false tắt hành vi này.
  * SKIP_SCHEMA_CHECK=true: bỏ qua bước này.
  */
 async function checkSchema({ log = console } = {}) {
@@ -24,7 +25,9 @@ async function checkSchema({ log = console } = {}) {
         return { ok: true, issues };
     }
 
-    if (process.env.AUTO_MIGRATE === 'true') {
+    const autoMigrate = process.env.AUTO_MIGRATE === 'true' ||
+        (process.env.AUTO_MIGRATE === undefined && process.env.RENDER === 'true');
+    if (autoMigrate) {
         log.log(`🔧 AUTO_MIGRATE: đang nâng cấp cấu trúc database (${plan.ops.length} bước)...`);
         await Schema.applyPlan({ query: (sql) => db.pool.query(sql).then(([rows]) => rows) }, plan.ops, { log: (l) => log.log(l) });
         plan = Schema.diff(await Schema.readSnapshot(db), Schema.loadTarget());

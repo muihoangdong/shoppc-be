@@ -211,5 +211,38 @@ const capture = (fn) => H.capture(fn);
         const broken = { query: async () => { throw new Error('ECONNRESET'); }, pool: db.pool }; const keep = db.query; db.query = broken.query;
         try { const l = mkLog(); const r = await startup.checkSchema({ log: l }); assert.strictEqual(r.ok, true); assert(/Không kiểm tra được cấu trúc/.test(l.out.join('\n'))); } finally { db.query = keep; }
     });
+    await test('Render tự nâng cấp khi chưa đặt AUTO_MIGRATE; false vẫn chặn production và không ghi database', async () => {
+        const keep = { render: process.env.RENDER, auto: process.env.AUTO_MIGRATE, mode: process.env.NODE_ENV };
+        try {
+            process.env.RENDER = 'true'; process.env.NODE_ENV = 'production'; delete process.env.AUTO_MIGRATE;
+            const sim = createSim(legacy, ORDER_ROWS());
+            const result = await withDb(sim, () => startup.checkSchema({ log: quiet }));
+            assert.strictEqual(result.migrated, true);
+            assert.deepStrictEqual(Schema.diff(await Schema.readSnapshot(sim), target).ops, []);
+            const count = sim.state.log.length;
+            const repeated = await withDb(sim, () => startup.checkSchema({ log: quiet }));
+            assert.strictEqual(repeated.ok, true); assert.strictEqual(sim.state.log.length, count, 'khởi động lại không chạy DDL lần nữa');
+            process.env.AUTO_MIGRATE = 'false';
+            const disabled = createSim(legacy, ORDER_ROWS());
+            await assert.rejects(withDb(disabled, () => startup.checkSchema({ log: quiet })), /migrate-db|AUTO_MIGRATE/);
+            assert.strictEqual(disabled.state.log.length, 0, 'tắt tự nâng cấp không sửa dữ liệu');
+        } finally {
+            for (const [key, value] of [['RENDER', keep.render], ['AUTO_MIGRATE', keep.auto], ['NODE_ENV', keep.mode]]) {
+                if (value === undefined) delete process.env[key]; else process.env[key] = value;
+            }
+        }
+    });
+    await test('Render lỗi migration thì không khởi động, không bỏ qua lỗi để chạy trên schema thiếu', async () => {
+        const keep = [process.env.RENDER, process.env.AUTO_MIGRATE];
+        process.env.RENDER = 'true'; delete process.env.AUTO_MIGRATE;
+        const sim = createSim(legacy, ORDER_ROWS());
+        sim.pool = { query: async () => { throw new Error('CREATE command denied'); } };
+        try { await assert.rejects(withDb(sim, () => startup.checkSchema({ log: quiet })), /CREATE command denied/); }
+        finally {
+            for (const [key, value] of [['RENDER', keep[0]], ['AUTO_MIGRATE', keep[1]]]) {
+                if (value === undefined) delete process.env[key]; else process.env[key] = value;
+            }
+        }
+    });
     done(); setImmediate(() => process.exit(process.exitCode || 0));
 })();
