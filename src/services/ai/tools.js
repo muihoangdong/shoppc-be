@@ -282,6 +282,7 @@ const readTools = [
                 ...compactProduct(p),
                 description: p.description,
                 image_url: p.image_url,
+                image_urls: p.image_urls || [],
                 specs: p.specs,
                 category_type: p.category_type,
                 created_at: fmtDate(p.created_at),
@@ -951,7 +952,48 @@ const imageTools = [{
         return { message: `Đã cập nhật ảnh chính cho #${product.id} "${product.name}"` };
     }
 }];
-const allTools = [...readTools, ...writeTools, ...imageTools];
+const background = require('./backgroundRemoval');
+const backgroundError = (err) => { if (err instanceof background.BackgroundError || err.expose) fail(err.message); throw err; };
+const backgroundTools = [{
+    name: 'remove_product_background', access: 'staff', write: true,
+    description: 'AI tách nền ảnh hiện có của sản phẩm qua Photoroom. Cần key cấu hình. Bắt buộc xác nhận trước khi gửi ảnh/có thể tính phí. Chỉ xử lý một ảnh/lượt. Lưu PNG và trả ảnh xem trước; CHƯA cập nhật sản phẩm. Sau đó dùng apply_background_removed_image nếu người dùng chọn áp dụng.',
+    input_schema: { type: 'object', properties: { product_id: { type: 'integer' }, source_url: { type: 'string', description: 'URL thuộc ảnh chính/thư viện hiện tại, trống = ảnh chính' } }, required: ['product_id'] },
+    parse(input) { return { product_id: pInt(input.product_id, 'ID sản phẩm', { min: 1 }), source_url: pStr(input.source_url, 'Ảnh nguồn', { max: 500, optional: true }) }; },
+    async describe(p) {
+        try { background.configured(); } catch (err) { backgroundError(err); }
+        const product = await mustGetProduct(p.product_id);
+        p.source_url = p.source_url || product.image_url;
+        if (!p.source_url || !background.imageList(product).includes(p.source_url)) fail('Sản phẩm chưa có ảnh hợp lệ. Hãy tải lên hoặc chọn ảnh Internet cho sản phẩm trước.');
+        return `AI tách nền ảnh #${product.id} "${product.name}"\nẢnh nguồn: ${p.source_url}\nGửi ảnh tới Photoroom để xử lý; có thể dùng hạn mức/tính phí của tài khoản API.\nLưu PNG nền trong suốt để xem trước, chưa cập nhật ảnh sản phẩm.`;
+    },
+    async run(p, ctx) {
+        const product = await mustGetProduct(p.product_id);
+        try {
+            const preview = await background.processImage(product, p.source_url, ctx.user.id);
+            return { message: `Đã tách nền. Xem ảnh PNG bên dưới; ảnh sản phẩm chưa thay đổi. Chọn Dùng ảnh này để chuẩn bị cập nhật. Mã kết quả: ${preview.result_id}`, preview };
+        } catch (err) { backgroundError(err); }
+    }
+}, {
+    name: 'apply_background_removed_image', access: 'staff', write: true,
+    description: 'Áp dụng ảnh PNG đã tách nền sau khi người dùng xem trước/chọn Dùng ảnh này. Cần xác nhận lần cuối. Giữ ảnh cũ trong thư viện, không gọi lại dịch vụ AI.',
+    input_schema: { type: 'object', properties: { product_id: { type: 'integer' }, result_id: { type: 'string' } }, required: ['product_id', 'result_id'] },
+    parse(input) { return { product_id: pInt(input.product_id, 'ID sản phẩm', { min: 1 }), result_id: pStr(input.result_id, 'Mã kết quả tách nền', { max: 100 }) }; },
+    async describe(p, ctx) {
+        const product = await mustGetProduct(p.product_id);
+        try { const r = background.getResult(p.result_id, product, ctx.user.id); return `Dùng ảnh PNG đã tách nền cho #${product.id} "${product.name}"\nẢnh mới: ${r.image_url}\nGiữ các ảnh cũ trong thư viện. Không gọi AI/tính phí thêm.`; }
+        catch (err) { backgroundError(err); }
+    },
+    async run(p, ctx) {
+        const product = await mustGetProduct(p.product_id); let r;
+        try { r = background.getResult(p.result_id, product, ctx.user.id); } catch (err) { backgroundError(err); }
+        const images = [...new Set([r.image_url, ...background.imageList(product)])];
+        if (images.length > 20) fail('Thư viện đã đủ 20 ảnh. Hãy xóa bớt ảnh trước khi áp dụng.');
+        await Product.updateProduct(product.id, { image_url: r.image_url, image_urls: images }, ctx.user);
+        require('../../realtime/events').productChanged([product.id]);
+        return { message: `Đã cập nhật ảnh tách nền cho #${product.id} "${product.name}"` };
+    }
+}];
+const allTools = [...readTools, ...writeTools, ...imageTools, ...backgroundTools];
 const byName = new Map(allTools.map((t) => [t.name, t]));
 
 const canUse = (tool, role) => role === 'admin' || (role === 'staff' && tool.access === 'staff');

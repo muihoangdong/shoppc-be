@@ -124,7 +124,7 @@ const test = async (name, fn) => {
     const a = Tools.getToolsForRole('admin').map((t) => t.name);
     assert(!s.includes('delete_product') && !s.includes('delete_category'));
     assert(a.includes('delete_product') && a.includes('delete_category'));
-    assert.strictEqual(a.length, 22); assert.strictEqual(s.length, 20);
+    assert.strictEqual(a.length, 24); assert.strictEqual(s.length, 22);
     for (const name of ['list_conversations', 'get_conversation', 'reply_to_conversation']) assert(s.includes(name), name);
     assert.strictEqual(Tools.getTool('reply_to_conversation').write, true, 'gửi tin cho khách phải cần xác nhận');
     for (const t of Tools.getToolsForRole('admin')) assert(t.input_schema && t.input_schema.type === 'object', t.name);
@@ -139,6 +139,30 @@ const test = async (name, fn) => {
   });
 
   console.log('Vòng lặp chat – đọc dữ liệu');
+  await test('tách nền: xác nhận mới gọi AI, trả preview; xác nhận áp dụng mới sửa sản phẩm', async () => {
+    const bg = require(path.join(BE, 'services/ai/backgroundRemoval.js'));
+    const keep = [bg.configured, bg.processImage, bg.getResult]; let calls = 0;
+    const keepProduct = clone(data.products[0]);
+    const preview = { result_id: 'test-preview-id', product_id: 10, image_url: 'https://api.example.com/api/uploads/files/result.png', original_url: 'https://images.example.com/original.jpg' };
+    bg.configured = () => {};
+    bg.processImage = async () => { calls++; return preview; };
+    bg.getResult = () => preview;
+    data.products[0].image_url = preview.original_url;
+    try {
+      script = [toolTurn(tu('remove_product_background', { product_id: 10 })), textTurn('Xác nhận gửi ảnh tới Photoroom.')];
+      const before = log.length;
+      const r = await Chat.runChat({ messages: U('Tách nền ảnh sản phẩm #10'), user: staff });
+      assert.strictEqual(calls, 0); assert.strictEqual(log.length, before);
+      const out = await Chat.confirmActions({ ids: [r.pending_actions[0].id], user: staff });
+      assert.deepStrictEqual(out[0].preview, preview); assert.strictEqual(calls, 1); assert.strictEqual(log.length, before);
+      await Chat.confirmActions({ ids: [r.pending_actions[0].id], user: staff }); assert.strictEqual(calls, 1);
+      script = [toolTurn(tu('apply_background_removed_image', { product_id: 10, result_id: preview.result_id })), textTurn('Kiểm tra và xác nhận dùng ảnh.')];
+      const apply = await Chat.runChat({ messages: U('Dùng ảnh này'), user: staff });
+      assert.strictEqual(log.length, before);
+      assert((await Chat.confirmActions({ ids: [apply.pending_actions[0].id], user: staff }))[0].ok);
+      assert.strictEqual(log.length, before + 1); assert.strictEqual(calls, 1);
+    } finally { [bg.configured, bg.processImage, bg.getResult] = keep; data.products[0] = keepProduct; }
+  });
   await test('tìm ảnh Internet → thẻ xác nhận → cập nhật ảnh đúng một lần, giữ ảnh cũ', async () => {
     const oldFetch = global.fetch;
     const oldKey = process.env.BRAVE_SEARCH_API_KEY;
