@@ -7,6 +7,7 @@ const { ValidationError } = require('../utils/http');
 
 const IMAGE_LIMIT = 10 * 1024 * 1024;
 const MODEL_LIMIT = 50 * 1024 * 1024;
+const GLB_LIMIT = 100 * 1024 * 1024;
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, '../../uploads/products'));
 const MIME = {
     '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
@@ -14,13 +15,18 @@ const MIME = {
 };
 const fail = (message, status = 400) => { throw new ValidationError(message, status); };
 
+function getUploadLimit(kind, filename) {
+    if (kind === 'image') return IMAGE_LIMIT;
+    return typeof filename === 'string' && path.extname(filename).toLowerCase() === '.glb' ? GLB_LIMIT : MODEL_LIMIT;
+}
+
 function validateFile(kind, filename, data) {
     if (!Buffer.isBuffer(data) || !data.length) fail('Chưa chọn file hoặc file rỗng');
     if (typeof filename !== 'string' || filename.length > 255) fail('Tên file không hợp lệ');
     const ext = path.extname(filename).toLowerCase();
     const allowed = kind === 'image' ? ['.png', '.jpg', '.jpeg', '.webp'] : ['.glb', '.gltf', '.usdz'];
     if (!allowed.includes(ext)) fail(kind === 'image' ? 'Chỉ nhận ảnh PNG, JPG, JPEG, WEBP' : 'Chỉ nhận mô hình GLB, GLTF hoặc USDZ');
-    const max = kind === 'image' ? IMAGE_LIMIT : MODEL_LIMIT;
+    const max = getUploadLimit(kind, filename);
     if (data.length > max) fail(`File vượt quá ${max / 1024 / 1024} MB`, 413);
     let valid = false;
     if (ext === '.png') valid = data.length >= 24 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
@@ -69,4 +75,4 @@ async function saveFile(kind, filename, data, directory = UPLOAD_DIR) {
     return { url: `/api/uploads/files/${storedName}`, filename: path.basename(filename), size: data.length, type: ext.slice(1) };
 }
 
-module.exports = { IMAGE_LIMIT, MODEL_LIMIT, UPLOAD_DIR, MIME, validateFile, saveFile };
+module.exports = { IMAGE_LIMIT, MODEL_LIMIT, GLB_LIMIT, UPLOAD_DIR, MIME, getUploadLimit, validateFile, saveFile };

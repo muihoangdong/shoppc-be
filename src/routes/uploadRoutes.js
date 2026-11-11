@@ -4,7 +4,7 @@ const express = require('express');
 const path = require('path');
 const rateLimit = require('../middlewares/rateLimit');
 const { sendError } = require('../utils/http');
-const { IMAGE_LIMIT, MODEL_LIMIT, UPLOAD_DIR, MIME, saveFile } = require('../services/productUploads');
+const { IMAGE_LIMIT, MODEL_LIMIT, GLB_LIMIT, UPLOAD_DIR, MIME, getUploadLimit, saveFile } = require('../services/productUploads');
 
 /** Raw binary body avoids base64 overhead and multipart dependencies. Auth runs before buffering. */
 function createUploadRouter({ authenticate, authorizeStaff, directory = UPLOAD_DIR }) {
@@ -22,9 +22,12 @@ function createUploadRouter({ authenticate, authorizeStaff, directory = UPLOAD_D
         });
     });
     const limiter = rateLimit({ windowMs: 60 * 1000, max: 40, message: 'Bạn tải quá nhiều file. Vui lòng thử lại sau một phút.' });
+    const parsers = new Map([IMAGE_LIMIT, MODEL_LIMIT, GLB_LIMIT].map((limit) => [
+        limit, express.raw({ type: 'application/octet-stream', limit, inflate: false })
+    ]));
     for (const kind of ['image', 'model']) {
         router.post(`/${kind}`, authenticate, authorizeStaff, limiter,
-            express.raw({ type: 'application/octet-stream', limit: kind === 'image' ? IMAGE_LIMIT : MODEL_LIMIT, inflate: false }),
+            (req, res, next) => parsers.get(getUploadLimit(kind, req.query.filename))(req, res, next),
             async (req, res) => {
                 try {
                     const data = await saveFile(kind, req.query.filename, req.body, directory);
@@ -33,7 +36,7 @@ function createUploadRouter({ authenticate, authorizeStaff, directory = UPLOAD_D
             });
     }
     router.use((err, req, res, next) => {
-        if (err.type === 'entity.too.large') return res.status(413).json({ success: false, message: 'File quá lớn (ảnh tối đa 10 MB, mô hình tối đa 50 MB)' });
+        if (err.type === 'entity.too.large') return res.status(413).json({ success: false, message: `File vượt quá ${err.limit / 1024 / 1024} MB` });
         next(err);
     });
     return router;

@@ -75,6 +75,26 @@ async function main() {
         assert.deepEqual(Buffer.from(await modelGet.arrayBuffer()), glb);
         console.log('✓ Upload/tải GLB thật giữ nguyên bytes và MIME');
 
+        const maxGlbBytes = 100 * 1024 * 1024;
+        const largeGlb = Buffer.alloc(maxGlbBytes + 1);
+        glb.copy(largeGlb);
+        largeGlb.writeUInt32LE(maxGlbBytes, 8);
+        largeGlb.writeUInt32LE(maxGlbBytes - glb.length - 8, glb.length);
+        largeGlb.write('BIN\0', glb.length + 4);
+        const accepted = await post('model', 'large.GLB', largeGlb.subarray(0, maxGlbBytes));
+        assert.equal(accepted.status, 201);
+        assert.equal((await accepted.json()).data.size, maxGlbBytes);
+
+        const rejectedGlb = await post('model', 'large.glb', largeGlb);
+        assert.equal(rejectedGlb.status, 413);
+        assert.match((await rejectedGlb.json()).message, /100 MB/);
+        for (const ext of ['gltf', 'usdz']) {
+            const rejectedModel = await post('model', `large.${ext}`, largeGlb.subarray(0, 50 * 1024 * 1024 + 1));
+            assert.equal(rejectedModel.status, 413);
+            assert.match((await rejectedModel.json()).message, /50 MB/);
+        }
+        console.log('✓ Nhận GLB đúng 100 MiB, chặn GLB và các định dạng khác vượt ngưỡng');
+
         const usdz = Buffer.from('UEsDBBQAAAAAAAAAIQDYT4/vNwAAADcAAAAKABgAbW9kZWwudXNkYYYZFAAAAAAAAAAAAAAAAAAAAAAAAAAAACN1c2RhIDEuMAooIGRlZmF1bHRQcmltID0gIlJvb3QiICkKZGVmIFhmb3JtICJSb290IiB7fQpQSwECFAAUAAAAAAAAACEA2E+P7zcAAAA3AAAACgAYAAAAAAAAAAAAgAEAAAAAbW9kZWwudXNkYYYZFAAAAAAAAAAAAAAAAAAAAAAAAAAAAFBLBQYAAAAAAQABAFAAAAB3AAAAAAA=', 'base64');
         const arResponse = await post('model', 'pc.usdz', usdz);
         assert.equal(arResponse.status, 201);

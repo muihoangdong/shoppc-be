@@ -13,7 +13,7 @@ URL ảnh/mô hình được admin chuyển thành URL đầy đủ của API. C
 ## Hợp đồng API
 
 - `POST /api/uploads/image?filename=ten.png`: PNG/JPG/JPEG/WEBP, tối đa 10 MiB.
-- `POST /api/uploads/model?filename=ten.glb`: GLB/GLTF/USDZ, tối đa 50 MiB.
+- `POST /api/uploads/model?filename=ten.glb`: GLB tối đa 100 MiB, GLTF và USDZ tối đa 50 MiB/file.
 - Body là bytes file (`Content-Type: application/octet-stream`); `Authorization: Bearer ...` bắt buộc, quyền admin hoặc staff. Giới hạn 40 request upload/phút/IP.
 - Thành công: HTTP 201, `{ "success": true, "data": { "url": "/api/uploads/files/UUID.glb", "filename": "ten.glb", "size": 123, "type": "glb" } }`.
 - `GET /api/uploads/files/UUID.ext`: công khai, MIME theo định dạng; hỗ trợ HTTP Range. Tên do server tạo, không dùng tên người dùng làm đường dẫn.
