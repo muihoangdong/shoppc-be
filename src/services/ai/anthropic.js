@@ -16,7 +16,8 @@
  */
 
 const { toOpenAIMessages, toOpenAITools, fromOpenAIResponse } = require('./openaiCompat');
-const { toResponsesInput, toResponsesTools, fromResponsesOutput } = require('./openaiResponses');
+const { setTimeout: waitForRetry } = require('node:timers/promises');
+const { toResponsesInput, toResponsesTools, fromResponsesOutput, openAIRateLimit } = require('./openaiResponses');
 const { toGeminiContents, toGeminiTools, fromGeminiResponse } = require('./gemini');
 const { explainFetchError, proxyTransport, rootCause } = require('./netDiagnostics');
 
@@ -109,7 +110,7 @@ async function callOpenAIResponses({ system, tools = [], messages, maxTokens }) 
     const timer = setTimeout(() => controller.abort(), timeoutMs());
     try {
         const via = proxyTransport(OPENAI_URL, (status, msg) => new AiError(status, msg));
-        const res = await (via ? via.fetch : fetch)(OPENAI_URL, {
+        const request = {
             ...(via ? { dispatcher: via.dispatcher } : {}),
             method: 'POST',
             signal: controller.signal,
@@ -125,15 +126,25 @@ async function callOpenAIResponses({ system, tools = [], messages, maxTokens }) 
                 max_output_tokens: (maxTokens || Number(process.env.AI_MAX_TOKENS) || 1500) + 2048,
                 ...(tools.length ? { tools: toResponsesTools(tools), parallel_tool_calls: false } : {})
             })
-        });
+        };
+        const send = via ? via.fetch : fetch;
+        let res = await send(OPENAI_URL, request);
+        let error = res.ok ? null : (await res.json().catch(() => null))?.error;
+        let rateLimit = res.status === 429 ? openAIRateLimit(error, res.headers?.get('retry-after')) : null;
+        // Chỉ thử lại một lần khi OpenAI báo giới hạn lưu lượng tạm thời và yêu cầu chờ ngắn.
+        if (rateLimit?.retryMs <= 3000) {
+            await waitForRetry(rateLimit.retryMs, undefined, { signal: controller.signal });
+            res = await send(OPENAI_URL, request);
+            error = res.ok ? null : (await res.json().catch(() => null))?.error;
+            rateLimit = res.status === 429 ? openAIRateLimit(error, res.headers?.get('retry-after')) : null;
+        }
 
         if (!res.ok) {
-            const error = await res.json().catch(() => null);
-            console.error('[ai] OpenAI Responses error', res.status, res.headers?.get('x-request-id'));
+            const code = [error?.code, error?.type].filter((value) => typeof value === 'string' && /^[a-z0-9_]{1,80}$/i.test(value));
+            console.error('[ai] OpenAI Responses error', res.status, ...code, res.headers?.get('x-request-id'));
             if (res.status === 401 || res.status === 403) throw new AiError(502, 'OpenAI từ chối yêu cầu. Hãy kiểm tra OPENAI_API_KEY và quyền của project.');
             if (res.status === 404) throw new AiError(502, `Model "${modelName()}" không khả dụng. Hãy kiểm tra AI_MODEL và quyền của project OpenAI.`);
-            if (res.status === 429 && error?.error?.code === 'insufficient_quota') throw new AiError(429, 'Project OpenAI hết hạn mức. Hãy kiểm tra thanh toán và hạn mức sử dụng.');
-            if (res.status === 429) throw new AiError(429, 'OpenAI đang giới hạn lưu lượng. Vui lòng thử lại sau.');
+            if (rateLimit) throw new AiError(429, rateLimit.message);
             if (res.status >= 500) throw new AiError(503, 'OpenAI đang gặp sự cố. Vui lòng thử lại sau.');
             throw new AiError(502, `Yêu cầu tới OpenAI Responses không hợp lệ (mã ${res.status}).`);
         }

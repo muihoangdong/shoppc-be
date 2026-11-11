@@ -4,6 +4,33 @@
 // Hai vòng lặp chat giữ nguyên mảng content. WeakMap giữ dữ liệu này ở backend trong lượt chat.
 const responseItems = new WeakMap();
 
+const quotaMessages = new Map([
+    ['credit_balance_exhausted', 'Tổ chức OpenAI đã hết credit API. Hãy nạp thêm credit trong phần Billing.'],
+    ['organization_spend_limit_exceeded', 'Tổ chức OpenAI đã chạm giới hạn chi tiêu. Hãy kiểm tra Limits của tổ chức.'],
+    ['project_spend_limit_exceeded', 'Project OpenAI đã chạm giới hạn chi tiêu. Hãy kiểm tra Limits của project.'],
+    ['organization_usage_limit_exceeded', 'Tổ chức đã chạm hạn mức sử dụng do OpenAI cấp. Hãy kiểm tra Limits của tổ chức.'],
+    ['insufficient_quota', 'Project OpenAI hết hạn mức. Hãy kiểm tra Billing và Limits.']
+]);
+
+function openAIRateLimit(error, retryAfter) {
+    const quota = quotaMessages.get(error?.code) || quotaMessages.get(error?.type);
+    if (quota) return { message: quota };
+
+    const throttled = error?.type === 'rate_limit_error' || ['rate_limit_exceeded', 'slow_down'].includes(error?.code);
+    if (!throttled) {
+        return { message: 'OpenAI từ chối yêu cầu (429). Hãy kiểm tra Billing, Limits hoặc mã lỗi trong log backend.' };
+    }
+
+    let retryMs;
+    if (retryAfter?.trim()) {
+        const seconds = Number(retryAfter);
+        const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter) - Date.now();
+        if (Number.isFinite(delay)) retryMs = Math.max(0, delay);
+    }
+    const wait = retryMs > 0 ? `Thử lại sau ít nhất ${Math.ceil(retryMs / 1000)} giây.` : 'Vui lòng thử lại sau.';
+    return { message: `OpenAI đang giới hạn lưu lượng. ${wait}`, retryMs };
+}
+
 function toResponsesInput(messages) {
     const input = [];
     for (const { role, content } of messages) {
@@ -59,4 +86,4 @@ function fromResponsesOutput(response) {
     return { content, stop_reason };
 }
 
-module.exports = { toResponsesInput, toResponsesTools, fromResponsesOutput };
+module.exports = { toResponsesInput, toResponsesTools, fromResponsesOutput, openAIRateLimit };

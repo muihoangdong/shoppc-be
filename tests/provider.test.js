@@ -22,7 +22,7 @@ global.fetch = async (url, opts) => {
     log.push({ url, headers: opts.headers, body: JSON.parse(opts.body) });
     const next = queue.shift(); if (!next) throw new Error('fetch hết kịch bản');
     if (next.throw) throw next.throw;
-    if (typeof next.status === 'number') return { ok: false, status: next.status, text: async () => next.body || '', json: async () => JSON.parse(next.body) };
+    if (typeof next.status === 'number') return { ok: false, status: next.status, headers: new Headers(next.headers), text: async () => next.body || '', json: async () => JSON.parse(next.body) };
     return { ok: true, status: 200, json: async () => next };
 };
 const oaText = (t, finish = 'stop') => ({ choices: [{ message: { role: 'assistant', content: t }, finish_reason: finish }] });
@@ -157,6 +157,30 @@ const responseCall = (name, args, call_id) => ({ type: 'function_call', id: `fc_
         assert.deepStrictEqual((await AI.runAgent(args)).toolCalls, []);
         await assert.rejects(AI.runAgent(args), /lệnh gọi công cụ không hợp lệ/);
         assert.strictEqual(calls, 0);
+    });
+    await test('OpenAI 429 phân biệt hết credit, giới hạn chi tiêu và giới hạn lưu lượng', async () => {
+        const config = { AI_PROVIDER: 'openai', OPENAI_API_KEY: 'project-key' };
+        const args = { messages: [{ role: 'user', content: 'Ping' }] };
+        const throttled = (error, delay) => ({ status: 429, body: JSON.stringify({ error }), headers: { 'Retry-After': delay } });
+        const cases = [
+            [{ code: 'credit_balance_exhausted', type: 'insufficient_quota' }, '0', /hết credit/],
+            [{ code: 'project_spend_limit_exceeded', type: 'insufficient_quota' }, '0', /Project OpenAI đã chạm giới hạn chi tiêu/],
+            [{ type: 'insufficient_quota' }, '0', /hết hạn mức/],
+            [{ code: 'slow_down' }, '12', /12 giây/],
+            [{}, '0', /Billing, Limits hoặc mã lỗi/]
+        ];
+        for (const [error, delay, pattern] of cases) {
+            setEnv(config);
+            queue = [throttled(error, delay)];
+            await H.capture(() => assert.rejects(AI.callModel(args), (err) => err.status === 429 && pattern.test(err.message)));
+            assert.strictEqual(log.length, 1);
+        }
+
+        setEnv(config);
+        queue = [throttled({ code: 'rate_limit_exceeded' }, '0'), response(responseText('OK'))];
+        assert.strictEqual(AI.textOf((await AI.callModel(args)).content), 'OK');
+        assert.strictEqual(log.length, 2);
+        assert.deepStrictEqual(log[0].body, log[1].body);
     });
     await test('runAgent qua Gemini: gọi công cụ → gửi kết quả về đúng tool_call_id → nhận câu trả lời', async () => {
         setEnv({ AI_PROVIDER: 'gemini-openai', GEMINI_API_KEY: 'k' }); queue = [oaTool('get_product', { id: 1 }, 'abc'), oaText('Dell XPS 13 giá 25 triệu.')];
