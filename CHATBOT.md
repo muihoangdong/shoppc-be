@@ -78,16 +78,29 @@ Ví dụ: "Sản phẩm nào sắp hết hàng?", "Nhập thêm 20 cái RAM Cors
 - Thêm công cụ: xem danh sách / đọc hội thoại hỗ trợ, gửi tin cho khách (cần bấm Xác nhận như mọi thao tác ghi).
 - Hội thoại với chatbot được giữ khi tải lại trang (thẻ xác nhận cũ không được lưu nên không thể thực thi lại).
 
-## Chọn nhà cung cấp AI (Gemini, Claude, Ollama)
-Đặt `AI_PROVIDER` trong `shoppc-be/.env`, rồi khởi động lại backend. Dòng log `🤖 AI:` cho biết đang dùng gì. Mọi tính năng (chatbot admin, trợ lý khách, các nút AI) hoạt động giống nhau với cả ba lựa chọn.
+## Chọn nhà cung cấp AI
+Đặt `AI_PROVIDER` trong `shoppc-be/.env`, rồi khởi động lại backend. Dòng log `🤖 AI:` cho biết đang dùng gì.
 
 | Lựa chọn | Cấu hình | Ghi chú |
 |---|---|---|
 | **Gemini** (khuyên dùng) | `AI_PROVIDER=gemini`, `GEMINI_API_KEY=...` | Có gói miễn phí (giới hạn lượt/phút, lượt/ngày). Lấy key: aistudio.google.com → Get API key. Model mặc định `gemini-3.5-flash`, tự chọn model dự phòng nếu không có |
 | Gemini (cách cũ) | `AI_PROVIDER=gemini-openai`, `GEMINI_API_KEY=...` | Qua endpoint kiểu OpenAI của Google; chỉ giữ để tương thích, Gemini 3.x có thể lỗi khi gọi công cụ nhiều bước |
 | Claude | `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY=...` | Trả phí. Rẻ/nhanh: `AI_MODEL=claude-haiku-4-5-20251001` |
+| OpenAI GPT‑6.1 Sol | `AI_PROVIDER=openai`, `OPENAI_API_KEY=...`, `AI_MODEL=gpt-6.1-sol` | Trả phí. Gọi công cụ qua Responses API. |
 | **Ollama** | `AI_PROVIDER=ollama` | Miễn phí, chạy trên máy, dữ liệu không rời máy. Cài từ ollama.com, rồi `ollama pull qwen2.5:7b`. Máy yếu: `qwen2.5:3b` (kém chính xác hơn); máy mạnh: `qwen2.5:14b` |
 | Dịch vụ khác kiểu OpenAI | `AI_PROVIDER=openai-compatible`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` | Ví dụ Groq, OpenRouter |
+
+### Bật GPT‑6.1 Sol
+
+Đặt các biến sau trong **Environment** của dịch vụ backend trên Render hoặc `.env` khi chạy local. Lấy key từ [OpenAI Platform](https://platform.openai.com/api-keys) và dùng project có quyền truy cập model.
+
+```dotenv
+AI_PROVIDER=openai
+AI_MODEL=gpt-6.1-sol
+OPENAI_API_KEY=<khóa API của project>
+```
+
+Triển khai lại backend hoặc khởi động lại khi chạy local. OpenAI nhận yêu cầu tại `/v1/responses` và nhận lại kết quả công cụ bằng `function_call_output` cùng `call_id`. Backend giữ các mục suy luận đã mã hóa trong lượt gọi công cụ với `store: false`. Các thao tác ghi của chatbot admin vẫn chờ người dùng bấm **Xác nhận**.
 
 Lưu ý:
 - Gói miễn phí của Gemini: dữ liệu gửi lên (gồm tin nhắn, tên/SĐT khách, thông tin đơn) có thể được Google dùng để cải thiện sản phẩm — đọc điều khoản trước khi dùng cho cửa hàng thật. Hết lượt miễn phí thì trợ lý khách tự chuyển cho nhân viên.

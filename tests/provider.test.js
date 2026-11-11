@@ -22,12 +22,16 @@ global.fetch = async (url, opts) => {
     log.push({ url, headers: opts.headers, body: JSON.parse(opts.body) });
     const next = queue.shift(); if (!next) throw new Error('fetch hết kịch bản');
     if (next.throw) throw next.throw;
-    if (next.status) return { ok: false, status: next.status, text: async () => next.body || '' };
+    if (typeof next.status === 'number') return { ok: false, status: next.status, text: async () => next.body || '', json: async () => JSON.parse(next.body) };
     return { ok: true, status: 200, json: async () => next };
 };
 const oaText = (t, finish = 'stop') => ({ choices: [{ message: { role: 'assistant', content: t }, finish_reason: finish }] });
 const oaTool = (name, args, id = 'call_1') => ({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) } }] }, finish_reason: 'tool_calls' }] });
-const setEnv = (env) => { for (const k of ['AI_PROVIDER', 'AI_BASE_URL', 'AI_API_KEY', 'GEMINI_API_KEY', 'AI_MODEL', 'ANTHROPIC_API_KEY', 'AI_TIMEOUT_MS']) delete process.env[k]; Object.assign(process.env, env); queue = []; log = []; };
+const setEnv = (env) => { for (const k of ['AI_PROVIDER', 'AI_BASE_URL', 'AI_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'AI_MODEL', 'ANTHROPIC_API_KEY', 'AI_TIMEOUT_MS']) delete process.env[k]; Object.assign(process.env, env); queue = []; log = []; };
+
+const response = (...output) => ({ status: 'completed', output });
+const responseText = (text) => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
+const responseCall = (name, args, call_id) => ({ type: 'function_call', id: `fc_${call_id}`, call_id, name, arguments: JSON.stringify(args), status: 'completed' });
 
 (async () => {
     console.log('Chuyển đổi định dạng');
@@ -105,6 +109,55 @@ const setEnv = (env) => { for (const k of ['AI_PROVIDER', 'AI_BASE_URL', 'AI_API
     });
 
     console.log('Chạy trọn vòng qua nhà cung cấp mới');
+    await test('GPT-6.1 Sol tra cứu và đề xuất thay đổi qua Responses API, giữ bước xác nhận', async () => {
+        setEnv({ AI_PROVIDER: 'openai', AI_API_KEY: 'other-provider-key' });
+        assert.strictEqual(AI.isConfigured(), false);
+        await assert.rejects(AI.callModel({ messages: [] }), /OPENAI_API_KEY/);
+
+        setEnv({ AI_PROVIDER: 'openai', OPENAI_API_KEY: 'project-key', AI_BASE_URL: 'https://other.example/v1' });
+        const reasoning = { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'encrypted' };
+        const lookup = responseCall('list_products', { max_stock: 10 }, 'call_lookup');
+        const remove = responseCall('delete_product', { id: 1 }, 'call_remove');
+        queue = [response(reasoning, lookup), response(remove), response(responseText('Bạn kiểm tra và xác nhận nhé.'))];
+        const messages = [{ role: 'user', content: 'Tìm sản phẩm sắp hết và chuẩn bị xóa Dell.' }];
+        const result = await chatService.runChat({ messages, user: { id: 1, username: 'admin', role: 'admin' } });
+
+        assert.strictEqual(AI.endpointUrl(), 'https://api.openai.com/v1/responses');
+        assert.strictEqual(log[0].url, AI.endpointUrl());
+        assert.strictEqual(log[0].headers.authorization, 'Bearer project-key');
+        const first = log[0].body;
+        assert.strictEqual(first.model, 'gpt-6.1-sol');
+        assert.strictEqual(first.store, false);
+        assert.deepStrictEqual(first.input, messages);
+        assert.deepStrictEqual(first.include, ['reasoning.encrypted_content']);
+        const tool = first.tools.find((item) => item.name === 'list_products');
+        assert.strictEqual(tool.type, 'function');
+        assert.strictEqual(tool.strict, false);
+        assert(tool.parameters.properties.max_stock);
+
+        const second = log[1].body.input;
+        assert.deepStrictEqual(second.slice(0, -1), [...messages, reasoning, lookup]);
+        assert.strictEqual(second.at(-1).type, 'function_call_output');
+        assert.strictEqual(second.at(-1).call_id, 'call_lookup');
+        assert.strictEqual(JSON.parse(second.at(-1).output).total_matched, 1);
+        const third = log[2].body.input;
+        assert.deepStrictEqual(third.slice(0, -1), [...second, remove]);
+        assert.strictEqual(third.at(-1).call_id, 'call_remove');
+        assert.match(third.at(-1).output, /CHƯA thực hiện/);
+        assert.strictEqual(result.pending_actions.length, 1);
+        assert.strictEqual(result.pending_actions[0].tool, 'delete_product');
+        assert.strictEqual(result.reply, 'Bạn kiểm tra và xác nhận nhé.');
+    });
+    await test('Responses API không chạy công cụ nếu phản hồi bị cắt hoặc tham số bị lỗi', async () => {
+        setEnv({ AI_PROVIDER: 'openai', OPENAI_API_KEY: 'project-key' });
+        const call = responseCall('delete_product', { id: 1 }, 'call_remove');
+        queue = [{ ...response(call), status: 'incomplete' }, response({ ...call, arguments: '{' })];
+        let calls = 0;
+        const args = { messages: [{ role: 'user', content: 'xóa Dell' }], executeTool: async () => { calls++; } };
+        assert.deepStrictEqual((await AI.runAgent(args)).toolCalls, []);
+        await assert.rejects(AI.runAgent(args), /lệnh gọi công cụ không hợp lệ/);
+        assert.strictEqual(calls, 0);
+    });
     await test('runAgent qua Gemini: gọi công cụ → gửi kết quả về đúng tool_call_id → nhận câu trả lời', async () => {
         setEnv({ AI_PROVIDER: 'gemini-openai', GEMINI_API_KEY: 'k' }); queue = [oaTool('get_product', { id: 1 }, 'abc'), oaText('Dell XPS 13 giá 25 triệu.')];
         let got; const r = await AI.runAgent({ system: 's', tools: [{ name: 'get_product', description: 'd', input_schema: { type: 'object' } }], messages: [{ role: 'user', content: 'giá Dell?' }], executeTool: async (b) => { got = b; return { price: 25000000 }; } });

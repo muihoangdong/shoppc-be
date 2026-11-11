@@ -6,6 +6,7 @@
  *   - gemini: Google Gemini qua API GỐC (generateContent), cần GEMINI_API_KEY (lấy tại aistudio.google.com).
  *     Nếu không đặt AI_PROVIDER mà chỉ có GEMINI_API_KEY (không có ANTHROPIC_API_KEY) thì tự dùng Gemini.
  *   - anthropic: Claude, cần ANTHROPIC_API_KEY.
+ *   - openai: OpenAI Responses API, cần OPENAI_API_KEY.
  *   - gemini-openai: Gemini qua endpoint tương thích OpenAI của Google (cách cũ, giữ lại để tương thích).
  *   - ollama: model chạy trên máy (miễn phí), mặc định http://localhost:11434/v1, không cần key.
  *   - openai-compatible: dịch vụ khác theo chuẩn OpenAI (Groq, OpenRouter...), cần AI_BASE_URL + AI_API_KEY.
@@ -15,19 +16,21 @@
  */
 
 const { toOpenAIMessages, toOpenAITools, fromOpenAIResponse } = require('./openaiCompat');
+const { toResponsesInput, toResponsesTools, fromResponsesOutput } = require('./openaiResponses');
 const { toGeminiContents, toGeminiTools, fromGeminiResponse } = require('./gemini');
 const { explainFetchError, proxyTransport, rootCause } = require('./netDiagnostics');
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+const OPENAI_URL = 'https://api.openai.com/v1/responses';
 const API_VERSION = '2023-06-01';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const PROVIDERS = ['anthropic', 'gemini', 'gemini-openai', 'ollama', 'openai-compatible'];
+const PROVIDERS = ['anthropic', 'gemini', 'gemini-openai', 'ollama', 'openai-compatible', 'openai'];
 const DEFAULT_BASE = { ollama: 'http://localhost:11434/v1', 'gemini-openai': `${GEMINI_URL}/openai` };
 // gemini-2.5-* bị Google tắt từ 16/10/2026 nên mặc định dùng đời 3.5; nếu model không tồn tại với key của bạn thì tự thử các model sau
 // Model chính + dự phòng (khi model không tồn tại / quá tải / hết lượt). Bản "lite" ít bị quá tải hơn.
 // Không còn gemini-2.5-*: Google đã ngừng cấp cho người dùng mới.
 const GEMINI_FALLBACK_MODELS = ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
-const DEFAULT_MODEL = { anthropic: 'claude-sonnet-5-5', ollama: 'qwen2.5:7b', gemini: GEMINI_FALLBACK_MODELS[0], 'gemini-openai': GEMINI_FALLBACK_MODELS[0] };
+const DEFAULT_MODEL = { anthropic: 'claude-sonnet-5-5', ollama: 'qwen2.5:7b', gemini: GEMINI_FALLBACK_MODELS[0], 'gemini-openai': GEMINI_FALLBACK_MODELS[0], openai: 'gpt-6.1-sol' };
 
 const isGemini = (p) => p === 'gemini' || p === 'gemini-openai';
 const provider = () => {
@@ -56,6 +59,7 @@ class AiError extends Error {
 const isConfigured = () => {
     const p = provider();
     if (p === 'anthropic') return !!process.env.ANTHROPIC_API_KEY;
+    if (p === 'openai') return !!cleanKey(process.env.OPENAI_API_KEY);
     if (p === 'ollama') return true; // không cần key; nếu Ollama chưa chạy sẽ báo lỗi rõ khi gọi
     if (isGemini(p)) return !!apiKey();
     return !!baseUrl() && !!process.env.AI_MODEL;
@@ -75,12 +79,14 @@ const apiKey = () =>
 /** Địa chỉ gọi API (dùng cho chẩn đoán DNS ở scripts/ai-check.js). */
 const endpointUrl = () => {
     if (provider() === 'anthropic') return ANTHROPIC_URL;
+    if (provider() === 'openai') return OPENAI_URL;
     if (provider() === 'gemini') return `${geminiBase()}/models/${encodeURIComponent(modelName())}:generateContent`;
     return `${baseUrl()}/chat/completions`;
 };
 
 /** Mô tả ngắn để in log khi khởi động server. */
 const describe = () => {
+    if (provider() === 'openai') return isConfigured() ? `OpenAI · ${modelName()} (Responses API)` : 'chưa cấu hình (thiếu OPENAI_API_KEY)';
     if (!isConfigured()) return `chưa cấu hình (${isGemini(provider()) ? 'thiếu GEMINI_API_KEY' : 'thiếu ANTHROPIC_API_KEY hoặc GEMINI_API_KEY'}) — chatbot, trợ lý khách và các nút AI sẽ tắt`;
     if (provider() === 'anthropic') return `Claude · ${modelName()}`;
     if (provider() === 'gemini') return `Google Gemini · ${modelName()} (API gốc)`;
@@ -90,7 +96,62 @@ const describe = () => {
 async function callModel(args) {
     if (provider() === 'anthropic') return callAnthropic(args);
     if (provider() === 'gemini') return callGemini(args);
+    if (provider() === 'openai') return callOpenAIResponses(args);
     return callOpenAICompatible(args);
+}
+
+async function callOpenAIResponses({ system, tools = [], messages, maxTokens }) {
+    const key = cleanKey(process.env.OPENAI_API_KEY);
+    if (!key) throw new AiError(503, 'Tính năng AI chưa được cấu hình: server thiếu OPENAI_API_KEY.');
+
+    const input = toResponsesInput(messages);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs());
+    try {
+        const via = proxyTransport(OPENAI_URL, (status, msg) => new AiError(status, msg));
+        const res = await (via ? via.fetch : fetch)(OPENAI_URL, {
+            ...(via ? { dispatcher: via.dispatcher } : {}),
+            method: 'POST',
+            signal: controller.signal,
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+            body: JSON.stringify({
+                model: modelName(),
+                ...(system ? { instructions: system } : {}),
+                input,
+                store: false,
+                include: ['reasoning.encrypted_content'],
+                reasoning: { effort: 'low' },
+                // Ngân sách đầu ra bao gồm cả token suy luận.
+                max_output_tokens: (maxTokens || Number(process.env.AI_MAX_TOKENS) || 1500) + 2048,
+                ...(tools.length ? { tools: toResponsesTools(tools), parallel_tool_calls: false } : {})
+            })
+        });
+
+        if (!res.ok) {
+            const error = await res.json().catch(() => null);
+            console.error('[ai] OpenAI Responses error', res.status, res.headers?.get('x-request-id'));
+            if (res.status === 401 || res.status === 403) throw new AiError(502, 'OpenAI từ chối yêu cầu. Hãy kiểm tra OPENAI_API_KEY và quyền của project.');
+            if (res.status === 404) throw new AiError(502, `Model "${modelName()}" không khả dụng. Hãy kiểm tra AI_MODEL và quyền của project OpenAI.`);
+            if (res.status === 429 && error?.error?.code === 'insufficient_quota') throw new AiError(429, 'Project OpenAI hết hạn mức. Hãy kiểm tra thanh toán và hạn mức sử dụng.');
+            if (res.status === 429) throw new AiError(429, 'OpenAI đang giới hạn lưu lượng. Vui lòng thử lại sau.');
+            if (res.status >= 500) throw new AiError(503, 'OpenAI đang gặp sự cố. Vui lòng thử lại sau.');
+            throw new AiError(502, `Yêu cầu tới OpenAI Responses không hợp lệ (mã ${res.status}).`);
+        }
+
+        const response = await res.json();
+        try {
+            return fromResponsesOutput(response);
+        } catch {
+            throw new AiError(502, 'OpenAI trả về phản hồi hoặc lệnh gọi công cụ không hợp lệ.');
+        }
+    } catch (err) {
+        if (err instanceof AiError) throw err;
+        if (err.name === 'AbortError') throw new AiError(504, 'OpenAI phản hồi quá lâu, vui lòng thử lại.');
+        const info = explainFetchError(err, { url: OPENAI_URL, provider: 'OpenAI' });
+        throw new AiError(502, info.message);
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 async function callAnthropic({ system, tools, messages, maxTokens }) {

@@ -25,7 +25,9 @@ async function run({ log = console.log, ai, tools, env = process.env, nodeVersio
     step(major >= 18, `Node.js ${nodeVersion}`, major >= 18 ? '' : 'Cần Node.js 18 trở lên (để có sẵn fetch). Hãy cập nhật Node.');
 
     const provider = ai.provider();
-    const key = provider === 'anthropic' ? env.ANTHROPIC_API_KEY : provider.startsWith('gemini') ? env.GEMINI_API_KEY || env.AI_API_KEY : env.AI_API_KEY;
+    const key = provider === 'openai' ? env.OPENAI_API_KEY
+        : provider === 'anthropic' ? env.ANTHROPIC_API_KEY
+            : provider.startsWith('gemini') ? env.GEMINI_API_KEY || env.AI_API_KEY : env.AI_API_KEY;
     log(`   Nhà cung cấp : ${provider}`);
     log(`   Model        : ${ai.modelName()}`);
     log(`   Khóa API     : ${provider === 'ollama' ? '(Ollama không cần key)' : mask(key)}`);
@@ -49,7 +51,9 @@ async function run({ log = console.log, ai, tools, env = process.env, nodeVersio
         first = await ai.callModel({ system: 'Chỉ trả lời đúng một từ: OK', messages: [{ role: 'user', content: 'Ping' }], maxTokens: 50 });
         const text = (first.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(' ').trim();
         step(true, `Gọi mô hình (${Date.now() - started} ms)`, text ? `Mô hình trả lời: "${text.slice(0, 60)}"` : 'Nhà cung cấp trả về phản hồi hợp lệ nhưng không có chữ (xem mục lưu ý bên dưới).');
-        if (!text) log('   ⚠️  Phản hồi rỗng thường do model dùng hết số token để "suy nghĩ". Gemini: thử AI_THINKING_LEVEL=minimal hoặc tăng AI_MAX_TOKENS (endpoint kiểu OpenAI: AI_REASONING_EFFORT=none).');
+        if (!text) log(provider === 'openai'
+            ? '   ⚠️  Phản hồi OpenAI không có chữ. Hãy kiểm tra model và thử một lượt chat thực tế.'
+            : '   ⚠️  Phản hồi rỗng thường do model dùng hết số token để "suy nghĩ". Gemini: thử AI_THINKING_LEVEL=minimal hoặc tăng AI_MAX_TOKENS (endpoint kiểu OpenAI: AI_REASONING_EFFORT=none).');
     } catch (error) {
         step(false, 'Gọi mô hình', error.message);
         return finish(results, log);
