@@ -11,7 +11,8 @@
  *     "glb_url": "https://cdn.../ryzen-9800x3d.glb",  // bắt buộc để bật 3D (.glb hoặc .gltf)
  *     "usdz_url": "https://cdn.../ryzen-9800x3d.usdz", // tùy chọn: AR trên iPhone/iPad; trống = model-viewer tự chuyển từ GLB
  *     "poster_url": "https://cdn.../poster.webp",       // tùy chọn: ảnh hiện trong lúc tải mô hình (trống = ảnh sản phẩm)
- *     "enabled": true                                   // false = tạm ẩn 3D mà không phải xóa link
+ *     "enabled": true,                                  // false = tạm ẩn 3D mà không phải xóa link
+ *     "dimensions_cm": { "length": 47.6, "width": 23, "height": 50 } // tùy chọn, số đo hiển thị
  *   }
  *
  * Lưu ý: file GLB đặt ở máy chủ khác phải cho phép CORS (Access-Control-Allow-Origin) thì trình duyệt mới tải được.
@@ -45,7 +46,18 @@ function parseModel3d(input, fail) {
         if (typeof input.enabled !== 'boolean') fail('3D: "enabled" phải là true/false');
         out.enabled = input.enabled;
     }
-    if ((usdz || poster) && !glb) fail('3D: cần nhập link file GLB trước');
+    if (input.dimensions_cm != null) {
+        if (typeof input.dimensions_cm !== 'object' || Array.isArray(input.dimensions_cm)) fail('3D: kích thước phải là một object');
+        const dimensions = {};
+        for (const [key, label] of [['length', 'Dài'], ['width', 'Rộng'], ['height', 'Cao']]) {
+            const value = input.dimensions_cm[key];
+            if (value === undefined) continue;
+            if (!Number.isFinite(value) || value <= 0) fail(`3D: kích thước ${label} phải là số lớn hơn 0 (cm)`);
+            dimensions[key] = value;
+        }
+        if (Object.keys(dimensions).length) out.dimensions_cm = dimensions;
+    }
+    if ((usdz || poster || out.dimensions_cm) && !glb) fail('3D: cần nhập link file GLB trước');
 
     return out.glb_url ? out : null;
 }

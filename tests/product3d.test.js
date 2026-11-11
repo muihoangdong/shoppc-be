@@ -44,6 +44,19 @@ const test = async (name, fn) => {
         throws(() => parseModel3d({ glb_url: 'https://cdn.x/a.glb', enabled: 'yes' }, fail), /enabled/);
         throws(() => parseModel3d({ glb_url: `https://cdn.x/${'a'.repeat(600)}.glb` }, fail), /không hợp lệ/);
     });
+    await test('lưu số đo tùy chọn theo cm, cho phép bỏ trống từng trục hoặc xóa tất cả', () => {
+        const glb_url = '/models/pc.glb';
+        assert.deepStrictEqual(parseModel3d({ glb_url, dimensions_cm: { length: 47.6, height: 50 } }, fail), {
+            glb_url, dimensions_cm: { length: 47.6, height: 50 }
+        });
+        assert.deepStrictEqual(parseModel3d({ glb_url, dimensions_cm: {} }, fail), { glb_url });
+        assert.deepStrictEqual(parseModel3d({ glb_url, dimensions_cm: null }, fail), { glb_url });
+        throws(() => parseModel3d({ dimensions_cm: { length: 40 } }, fail), /GLB/);
+        for (const width of [0, -1, Infinity, NaN, '40', null]) {
+            throws(() => parseModel3d({ glb_url, dimensions_cm: { width } }, fail), /Rộng/);
+        }
+        throws(() => parseModel3d({ glb_url, dimensions_cm: [] }, fail), /object/);
+    });
     await test('has3d: chỉ bật khi có GLB và không bị tắt', () => {
         assert.strictEqual(has3d(null), false);
         assert.strictEqual(has3d({ glb_url: '/m.glb' }), true);
