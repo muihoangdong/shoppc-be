@@ -26,7 +26,8 @@ services:
       - key: JWT_SECRET
         generateValue: true
 
-      # ── Database (Aiven MySQL) ──
+      # ── TiDB Cloud (MySQL) ──
+      # Lấy host, port (thường là 4000) và username có tiền tố từ TiDB Cloud → Connect.
       - key: DB_HOST
         sync: false
       - key: DB_PORT
@@ -38,7 +39,8 @@ services:
       - key: DB_NAME
         value: shopdb
       - key: DB_SSL
-        value: "true"
+        # Điền verify-identity cho TiDB Cloud. Đặt trong Environment nếu service đã tồn tại.
+        sync: false
 
       # ── Domain của 2 trang frontend (điền sau khi deploy Vercel) ──
       - key: CORS_ORIGINS

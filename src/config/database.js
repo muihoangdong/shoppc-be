@@ -1,6 +1,14 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
+const sslMode = process.env.DB_SSL;
+let ssl;
+if (sslMode === 'verify-identity') {
+    ssl = { minVersion: 'TLSv1.2', rejectUnauthorized: true, verifyIdentity: true };
+} else if (sslMode === 'true') {
+    ssl = { rejectUnauthorized: false };
+}
+
 const pool = mysql.createPool({
     host: process.env.DB_HOST || 'localhost',
     port: process.env.DB_PORT || 3306,
@@ -12,10 +20,7 @@ const pool = mysql.createPool({
     connectionLimit: 10,
     queueLimit: 0,
 
-    // Nếu dùng Render MySQL thì bật SSL
-    ssl: process.env.DB_SSL === 'true'
-        ? { rejectUnauthorized: false }
-        : undefined
+    ssl
 });
 
 // Error handler
